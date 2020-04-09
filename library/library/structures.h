@@ -153,6 +153,13 @@ typedef struct {
 	void * payload;
 } _aux_serialization;
 
+typedef struct {
+	int number;
+	void * partition_start;
+	int partition_size;
+	int free_size;
+	int is_free;
+} memory_partition;
 
 /*
  *
