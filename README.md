@@ -2,11 +2,11 @@
 
 ## Integrantes
 
-* Nicolas Molina
-* Dante Bado
-* Matias Iglesias
-* Agustin De Cesare
-* Franco Montenegro
+* *Nicolas Molina*
+* *Dante Bado*
+* *Matias Iglesias*
+* *Agustin De Cesare*
+* *Franco Montenegro*
 
 ### Libreria
 
