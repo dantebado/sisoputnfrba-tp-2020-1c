@@ -15,6 +15,8 @@ sem_t * clients_mutex;
 t_list * messages_index;
 sem_t * messages_index_mutex;
 
+void * main_memory;
+
 /*/
  *
  * PROTOTYPES
@@ -23,6 +25,13 @@ sem_t * messages_index_mutex;
 
 //SETUP
 void setup(int argc, char **argv);
+
+//MEMORY
+void init_memory();
+char * enum_to_memory_alg(_memory_alg alg);
+char * enum_to_memory_replacement_alg(_remplacement_alg alg);
+char * enum_to_memory_selection_alg(_seek_alg alg);
+int closest_bs_size(int payload_size);
 
 //QUEUES
 void init_queue(_message_queue_name);
@@ -53,25 +62,6 @@ int is_same_client(client * c1, client * c2);
 client * add_or_get_client(int socket, char * ip, int port);
 
 int main(int argc, char **argv) {
-
-	/*serialize_message_payload(new_pokemon_create("Pikachu", 5, 10, 2));
-
-	queue_message * lm = localized_pokemon_create("Pikachu", list_create());
-
-	localized_pokemon_add_location(lm->payload, location_create(4, 5));
-	localized_pokemon_add_location(lm->payload, location_create(1, 5));
-	localized_pokemon_add_location(lm->payload, location_create(9, 3));
-	serialize_message_payload(lm);
-
-	serialize_message_payload(get_pokemon_create("Pikachu"));
-
-	serialize_message_payload(appeared_pokemon_create("Pikachu", 1, 5));
-
-	serialize_message_payload(catch_pokemon_create("Pikachu", 1, 5));
-
-	serialize_message_payload(caught_pokemon_create(0));
-
-	return 1;*/
 
 	setup(argc, argv);
 
@@ -113,6 +103,9 @@ void setup(int argc, char **argv) {
 		CONFIG.seek_alg = BEST_FIT;
 	}
 
+	init_memory();
+	return;
+
 	last_message_id = 0;
 
 	log_info(LOGGER, "Configuration loaded");
@@ -139,6 +132,59 @@ void setup(int argc, char **argv) {
 	bind_socket(CONFIG.internal_socket, CONFIG.broker_port);
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
 	pthread_join(CONFIG.server_thread, NULL);
+}
+
+/*
+ *
+ * MEMORY *
+ *
+ * */
+void init_memory() {
+	log_info(LOGGER, "Initializing Memory of %d bytes", CONFIG.memory_size);
+	log_info(LOGGER, "Min partition size %d bytes", CONFIG.partition_min_size);
+	log_info(LOGGER, "%s, with %s replacement and %s seeking", enum_to_memory_alg(CONFIG.memory_alg),
+			enum_to_memory_replacement_alg(CONFIG.remplacement_alg), enum_to_memory_selection_alg(CONFIG.seek_alg));
+
+	main_memory = malloc(CONFIG.memory_size);
+}
+
+char * enum_to_memory_alg(_memory_alg alg) {
+	switch(alg) {
+		case PARTITIONS:
+			return "PARTICIONES";
+		case BUDDY_SYSTEM:
+			return "BUDDY_SYSTEM";
+	}
+	return "";
+}
+
+char * enum_to_memory_replacement_alg(_remplacement_alg alg) {
+	switch(alg) {
+		case FIFO_REPLACEMENT:
+			return "FIFO";
+		case LRU:
+			return "LRU";
+	}
+	return "";
+}
+
+char * enum_to_memory_selection_alg(_seek_alg alg) {
+	switch(alg) {
+		case FIRST_FIT:
+			return "FIRST_FIT";
+		case BEST_FIT:
+			return "BEST_FIT";
+	}
+	return "";
+}
+
+int closest_bs_size(int payload_size) {
+	int potency = 1, acum_result = 2;
+	while(acum_result < payload_size) {
+		potency++;
+		acum_result *= 2;
+	}
+	return acum_result;
 }
 
 /*
