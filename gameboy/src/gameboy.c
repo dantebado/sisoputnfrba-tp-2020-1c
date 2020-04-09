@@ -11,22 +11,23 @@ void setup(int argc, char **argv);
 int main(int argc, char **argv) {
 	setup(argc, argv);
 
-	int test = true;
+	int test = false;
 
 	if(test) {
 		char * pokemons[] = { "Pikachu", "Charmander", "Squirtle", "Pidgey" };
-		int pokemons_c = 5;
+		int pokemons_c = 4;
 
 		srand (time(NULL));
 
 		int socket = _command_connect_to_broker(CONFIG);
-		int i;
+		int i, type;
 
-		for(i=0 ; i<100 ; i++) {
+		for(i=1 ; i>0 ; i++) {
 
 			char * selected_pokemon = pokemons[rand() % pokemons_c];
-			int type = rand() % 6;
-			//type = 4;
+
+			type = rand()%6;
+
 			switch(type) {
 				case NEW_POKEMON:;
 						send_pokemon_message(socket, new_pokemon_create(selected_pokemon, rand()%21, rand()%21, rand()%6), 1, -1);
@@ -53,6 +54,7 @@ int main(int argc, char **argv) {
 					break;
 			}
 
+			usleep(0.5 * 1000 * 1000);
 		}
 
 		close_socket(socket);
