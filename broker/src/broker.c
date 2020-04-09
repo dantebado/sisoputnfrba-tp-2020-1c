@@ -97,7 +97,7 @@ void setup(int argc, char **argv) {
 	string_append(&cfg_path, ".cfg");
 	_CONFIG = config_create(cfg_path);
 
-	LOGGER = log_create(config_get_string_value(_CONFIG, "LOG_FILE"), (argc > 1) ? argv[1] : "broker", true, LOG_LEVEL_INFO);
+	LOGGER = log_create(config_get_string_value(_CONFIG, "LOG_FILE"), (argc > 1) ? argv[1] : "broker", true, LOG_LEVEL_TRACE);
 
 	CONFIG.memory_size = config_get_int_value(_CONFIG, "TAMANO_MEMORIA");
 	CONFIG.partition_min_size = config_get_int_value(_CONFIG, "TAMANO_MINIMO_PARTICION");
@@ -121,7 +121,6 @@ void setup(int argc, char **argv) {
 	}
 
 	init_memory();
-	return;
 
 	last_message_id = 0;
 
@@ -176,41 +175,10 @@ void init_memory() {
 	sem_wait(memory_access_mutex);
 	switch(CONFIG.memory_alg) {
 		case BUDDY_SYSTEM:
-			list_add(partitions, partition_create(0, CONFIG.memory_size, main_memory));
+			list_add(partitions, partition_create(0, CONFIG.memory_size, main_memory, NULL));
 			break;
 	}
 	sem_post(memory_access_mutex);
-
-	print_partitions_info();
-	write_payload_to_memory(100, main_memory);
-	print_partitions_info();
-	write_payload_to_memory(200, main_memory);
-	print_partitions_info();
-	write_payload_to_memory(50, main_memory);
-	print_partitions_info();
-	write_payload_to_memory(512, main_memory);
-	print_partitions_info();
-
-	access_partition(list_get(partitions, 4));
-	access_partition(list_get(partitions, 3));
-	access_partition(list_get(partitions, 2));
-	access_partition(list_get(partitions, 1));
-	access_partition(list_get(partitions, 0));
-
-	write_payload_to_memory(514, main_memory);
-	print_partitions_info();
-
-	/*write_payload_to_memory(500, main_memory);
-	print_partitions_info();
-
-	free_memory_partition(list_get(partitions, 1));
-	print_partitions_info();
-	free_memory_partition(list_get(partitions, 3));
-	print_partitions_info();
-	free_memory_partition(list_get(partitions, 0));
-	print_partitions_info();
-	free_memory_partition(list_get(partitions, 1));
-	print_partitions_info();*/
 }
 
 char * enum_to_memory_alg(_memory_alg alg) {
@@ -253,16 +221,18 @@ int closest_bs_size(int payload_size) {
 }
 
 memory_partition * get_available_partition_by_payload_size(int payload_size) {
-	if(payload_size > CONFIG.memory_size) {
+	int partition_size = payload_size;
+	if(CONFIG.memory_alg == BUDDY_SYSTEM) {
+		partition_size = closest_bs_size(payload_size);
+	}
+	if(partition_size > CONFIG.memory_size) {
 		log_error(LOGGER, "Data is too big for this memory");
 		return NULL;
 	}
-	int partition_size = payload_size;
 	switch(CONFIG.memory_alg) {
 		case PARTITIONS:
 			return "PARTICIONES";
 		case BUDDY_SYSTEM:
-			partition_size = closest_bs_size(payload_size);
 			return get_bs_available_partition_by_size(partition_size);
 	}
 	return NULL;
@@ -270,8 +240,8 @@ memory_partition * get_available_partition_by_payload_size(int payload_size) {
 
 memory_partition * bs_split_partition(memory_partition * partition) {
 	int split_size = partition->partition_size / 2;
-	memory_partition * p1 = partition_create(partition->number, split_size, partition->partition_start);
-	memory_partition * p2 = partition_create(partition->number + 1, split_size, partition->partition_start + split_size);
+	memory_partition * p1 = partition_create(partition->number, split_size, partition->partition_start, NULL);
+	memory_partition * p2 = partition_create(partition->number + 1, split_size, partition->partition_start + split_size, NULL);
 
 	sem_wait(memory_access_mutex);
 	t_list * a_list = list_create();
@@ -358,6 +328,19 @@ void print_partition_info(memory_partition * partition) {
 }
 
 void free_memory_partition(memory_partition * partition) {
+	message_queue * queue = find_queue_by_name(partition->message->message->header->queue);
+	sem_wait(queue->mutex);
+	sem_wait(messages_index_mutex);
+
+		_Bool * is_same_message(broker_message * p1) {
+			return p1->message->header->message_id == partition->message->message->header->message_id;
+		}
+		list_remove_by_condition(messages_index, is_same_message);
+		list_remove_by_condition(queue->messages, is_same_message);
+
+	sem_post(messages_index_mutex);
+	sem_post(queue->mutex);
+
 	sem_wait(memory_access_mutex);
 	partition->free_size = partition->partition_size;
 	partition->is_free = true;
@@ -372,6 +355,9 @@ void free_memory_partition(memory_partition * partition) {
 
 memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 	log_info(LOGGER, "Writing %d bytes", payload_size);
+
+	print_partitions_info();
+
 	memory_partition * the_partition = get_available_partition_by_payload_size(payload_size);
 
 	if(the_partition == NULL) {
@@ -381,10 +367,13 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 		the_partition->free_size = the_partition->partition_size - payload_size;
 		memcpy(the_partition->partition_start, payload, payload_size);
 
+		memory_free_space -= payload_size;
+
 		log_info(LOGGER, "Payload written in partition %d", the_partition->number);
 
-		memory_free_space -= payload_size;
 	}
+
+	print_partitions_info();
 
 	return the_partition;
 }
@@ -517,8 +506,25 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	final_message->already_acknowledged = list_create();
 
 	void * original_payload = message->payload;
-	message->payload = serialize_message_payload(message)->payload;
+	_aux_serialization * aux_str = serialize_message_payload(message);
+	message->payload = aux_str->payload;
 	destroy_unserialized(original_payload, message->header->type);
+
+	memory_partition * partition = write_payload_to_memory(aux_str->size, aux_str->payload);
+	if(partition == NULL) {
+		list_destroy(final_message->already_sent);
+		list_destroy(final_message->already_acknowledged);
+
+		free(aux_str->payload);
+		free(aux_str);
+		free(final_message);
+
+		return OPT_FAILED;
+	}
+	free(aux_str->payload);
+	free(aux_str);
+	partition->message = final_message;
+	final_message->message->payload = partition;
 
 	log_info(LOGGER, "Adding message %d to queue %s", message->header->message_id, enum_to_queue_name(queue_name));
 	sem_wait(queue->mutex);
@@ -538,8 +544,9 @@ void queue_thread_function(message_queue * queue) {
 		for(i=0 ; i<queue->messages->elements_count ; i++) {
 			broker_message * tmessage = list_get(queue->messages, i);
 
-			void * serialized_message = tmessage->message->payload;
-			void * deserialized_message = deserialize_message_payload(tmessage->message->payload, tmessage->message->header->type);
+			memory_partition * partition = tmessage->message->payload;
+
+			void * deserialized_message = deserialize_message_payload(partition->partition_start, tmessage->message->header->type);
 			tmessage->message->is_serialized = false;
 			tmessage->message->payload = deserialized_message;
 
@@ -565,9 +572,11 @@ void queue_thread_function(message_queue * queue) {
 
 			destroy_unserialized(deserialized_message, tmessage->message->header->type);
 			tmessage->message->is_serialized = true;
-			tmessage->message->payload = serialized_message;
+			tmessage->message->payload = partition;
 		}
 		sem_post(queue->mutex);
+
+		sleep(2);
 	}
 }
 
