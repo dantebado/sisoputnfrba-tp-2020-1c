@@ -159,6 +159,8 @@ typedef struct {
 	int partition_size;
 	int free_size;
 	int is_free;
+	int access_time;
+	int entry_time;
 } memory_partition;
 
 /*

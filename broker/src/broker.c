@@ -19,6 +19,8 @@ t_list * partitions;
 void * main_memory;
 int memory_free_space;
 sem_t * memory_access_mutex;
+int time_counter;
+sem_t * time_counter_mutex;
 
 /*/
  *
@@ -44,6 +46,9 @@ void print_partition_info(memory_partition * partition);
 void free_memory_partition(memory_partition * partition);
 memory_partition * write_payload_to_memory(int payload_size, void * payload);
 void compact_memory(int already_reserved_mutex);
+void remove_a_partition();
+void * access_partition(memory_partition * partition);
+int get_time_counter();
 
 //QUEUES
 void init_queue(_message_queue_name);
@@ -158,6 +163,9 @@ void init_memory() {
 	log_info(LOGGER, "%s, with %s replacement and %s seeking", enum_to_memory_alg(CONFIG.memory_alg),
 			enum_to_memory_replacement_alg(CONFIG.remplacement_alg), enum_to_memory_selection_alg(CONFIG.seek_alg));
 
+	time_counter_mutex = malloc(sizeof(sem_t));
+	sem_init(time_counter_mutex, 0, 1);
+	time_counter = 0;
 	partitions = list_create();
 	main_memory = malloc(CONFIG.memory_size);
 	memory_free_space = CONFIG.memory_size;
@@ -304,6 +312,8 @@ memory_partition * partition_create(int number, int size, void * start) {
 	total_partition->is_free = 1;
 	total_partition->partition_size = size;
 	total_partition->free_size = size;
+	total_partition->access_time = get_time_counter();
+	total_partition->entry_time = get_time_counter();
 	return total_partition;
 }
 
@@ -400,6 +410,41 @@ void compact_memory(int already_reserved_mutex) {
 		sem_post(memory_access_mutex);
 	}
 	log_info(LOGGER, "Compacting Ended");
+}
+
+void remove_a_partition() {
+	int i, j;
+	memory_partition * to_remove = NULL;
+	switch(CONFIG.remplacement_alg) {
+		case FIFO_REPLACEMENT:
+			break;
+		case LRU:
+			int now_time_counter = get_time_counter();
+			for(i=0 ; i<partitions->elements_count ; i++) {
+				memory_partition * partition = list_get(partitions, 0);
+				if(now_time_counter >= partition->access_time) {
+					now_time_counter = partition->access_time;
+					to_remove = partition;
+				}
+			}
+			break;
+	}
+	if(to_remove == NULL) {
+		log_info(LOGGER, "No partition to remove");
+	}
+	free_memory_partition(to_remove);
+}
+
+void * access_partition(memory_partition * partition) {
+	partition->access_time = get_time_counter();
+	return partition->partition_start;
+}
+
+int get_time_counter() {
+	sem_wait(time_counter_mutex);
+	time_counter++;
+	sem_post(time_counter_mutex);
+	return time_counter;
 }
 
 /*
