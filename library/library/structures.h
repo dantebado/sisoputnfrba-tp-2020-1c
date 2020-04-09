@@ -161,6 +161,7 @@ typedef struct {
 	int is_free;
 	int access_time;
 	int entry_time;
+	broker_message * message;
 } memory_partition;
 
 /*

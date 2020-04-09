@@ -40,7 +40,7 @@ int closest_bs_size(int payload_size);
 memory_partition * get_available_partition_by_payload_size(int payload_size);
 memory_partition * bs_split_partition(memory_partition * partition);
 memory_partition * get_bs_available_partition_by_size(int partition_size);
-memory_partition * partition_create(int number, int size, void * start);
+memory_partition * partition_create(int number, int size, void * start, broker_message * message);
 void print_partitions_info();
 void print_partition_info(memory_partition * partition);
 void free_memory_partition(memory_partition * partition);
@@ -188,8 +188,16 @@ void init_memory() {
 	print_partitions_info();
 	write_payload_to_memory(50, main_memory);
 	print_partitions_info();
+	write_payload_to_memory(512, main_memory);
+	print_partitions_info();
 
-	write_payload_to_memory(513, main_memory);
+	access_partition(list_get(partitions, 4));
+	access_partition(list_get(partitions, 3));
+	access_partition(list_get(partitions, 2));
+	access_partition(list_get(partitions, 1));
+	access_partition(list_get(partitions, 0));
+
+	write_payload_to_memory(514, main_memory);
 	print_partitions_info();
 
 	/*write_payload_to_memory(500, main_memory);
@@ -287,11 +295,7 @@ memory_partition * bs_split_partition(memory_partition * partition) {
 }
 
 memory_partition * get_bs_available_partition_by_size(int partition_size) {
-	if(partition_size > memory_free_space) {
-		log_error(LOGGER, "There is no free space in memory");
-		return NULL;
-	}
-	int i, j, k;
+	int i;
 	for(i=0 ; i<partitions->elements_count ; i++) {
 		memory_partition * tpartition = list_get(partitions, i);
 		if(tpartition->partition_size >= partition_size && tpartition->is_free) {
@@ -301,20 +305,36 @@ memory_partition * get_bs_available_partition_by_size(int partition_size) {
 			return tpartition;
 		}
 	}
-	log_info(LOGGER, "No se pudo encontrar particion adecuada");
-	return NULL;
+
+	log_info(LOGGER, "Cannot find right partition. Compacting...");
+	compact_memory(false);
+
+	for(i=0 ; i<partitions->elements_count ; i++) {
+		memory_partition * tpartition = list_get(partitions, i);
+		if(tpartition->partition_size >= partition_size && tpartition->is_free) {
+			while(tpartition->partition_size > partition_size) {
+				tpartition = bs_split_partition(tpartition);
+			}
+			return tpartition;
+		}
+	}
+
+	log_error(LOGGER, "There is no free space in memory. Removing a partition.");
+	remove_a_partition();
+	return get_bs_available_partition_by_size(partition_size);
 }
 
-memory_partition * partition_create(int number, int size, void * start) {
-	memory_partition * total_partition = malloc(sizeof(memory_partition));
-	total_partition->number = number;
-	total_partition->partition_start = start;
-	total_partition->is_free = 1;
-	total_partition->partition_size = size;
-	total_partition->free_size = size;
-	total_partition->access_time = get_time_counter();
-	total_partition->entry_time = get_time_counter();
-	return total_partition;
+memory_partition * partition_create(int number, int size, void * start, broker_message * message) {
+	memory_partition * partition = malloc(sizeof(memory_partition));
+	partition->number = number;
+	partition->partition_start = start;
+	partition->is_free = 1;
+	partition->partition_size = size;
+	partition->free_size = size;
+	partition->access_time = get_time_counter();
+	partition->entry_time = get_time_counter();
+	partition->message = message;
+	return partition;
 }
 
 void print_partitions_info() {
@@ -330,8 +350,10 @@ void print_partitions_info() {
 }
 
 void print_partition_info(memory_partition * partition) {
-	log_info(LOGGER, "\t\t%d SIZE %d Bytes, Free %d @ %d - %d", partition->number,
-			partition->partition_size, partition->is_free, partition->partition_start,
+	log_info(LOGGER, "\t\t%d SIZE %d Bytes, Free %d LA %d @ %d - %d", partition->number,
+			partition->partition_size, partition->is_free,
+			partition->access_time,
+			partition->partition_start,
 			partition->partition_start + partition->partition_size);
 }
 
@@ -340,6 +362,8 @@ void free_memory_partition(memory_partition * partition) {
 	partition->free_size = partition->partition_size;
 	partition->is_free = true;
 
+	memory_free_space += partition->partition_size;
+
 	if(CONFIG.memory_alg == BUDDY_SYSTEM) {
 		compact_memory(true);
 	}
@@ -347,6 +371,7 @@ void free_memory_partition(memory_partition * partition) {
 }
 
 memory_partition * write_payload_to_memory(int payload_size, void * payload) {
+	log_info(LOGGER, "Writing %d bytes", payload_size);
 	memory_partition * the_partition = get_available_partition_by_payload_size(payload_size);
 
 	if(the_partition == NULL) {
@@ -356,6 +381,8 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 		the_partition->free_size = the_partition->partition_size - payload_size;
 		memcpy(the_partition->partition_start, payload, payload_size);
 
+		log_info(LOGGER, "Payload written in partition %d", the_partition->number);
+
 		memory_free_space -= payload_size;
 	}
 
@@ -363,8 +390,6 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 }
 
 void compact_memory(int already_reserved_mutex) {
-	log_info(LOGGER, "Compacting memory");
-
 	if(!already_reserved_mutex){
 		sem_wait(memory_access_mutex);
 	}
@@ -409,7 +434,7 @@ void compact_memory(int already_reserved_mutex) {
 	if(!already_reserved_mutex){
 		sem_post(memory_access_mutex);
 	}
-	log_info(LOGGER, "Compacting Ended");
+	log_info(LOGGER, "Memory has been compacted");
 }
 
 void remove_a_partition() {
@@ -418,11 +443,11 @@ void remove_a_partition() {
 	switch(CONFIG.remplacement_alg) {
 		case FIFO_REPLACEMENT:
 			break;
-		case LRU:
+		case LRU:;
 			int now_time_counter = get_time_counter();
 			for(i=0 ; i<partitions->elements_count ; i++) {
-				memory_partition * partition = list_get(partitions, 0);
-				if(now_time_counter >= partition->access_time) {
+				memory_partition * partition = list_get(partitions, i);
+				if(now_time_counter >= partition->access_time && !partition->is_free) {
 					now_time_counter = partition->access_time;
 					to_remove = partition;
 				}
@@ -431,6 +456,8 @@ void remove_a_partition() {
 	}
 	if(to_remove == NULL) {
 		log_info(LOGGER, "No partition to remove");
+	} else {
+		log_info(LOGGER, "Removing partition %d", to_remove->number);
 	}
 	free_memory_partition(to_remove);
 }
