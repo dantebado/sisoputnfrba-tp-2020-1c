@@ -1,6 +1,7 @@
 # La Ultima Cursada de Sistemas Operativos
 
 ##Integrantes
+
 *Nicolas Molina
 *Dante Bado
 *Matias Iglesias
@@ -8,7 +9,9 @@
 *Franco Montenegro
 
 ###Libreria
+
 La misma incluye:
+
 -Carga de todas las configuraciones en los 4 procesos.
 -Todas las conexiones hacia el broker y el levante de cada servidor.
 -La escucha de los mensajes tanto por parte de las colas como del socket interno (para los mensajes del gameboy).
