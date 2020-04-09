@@ -546,7 +546,7 @@ void queue_thread_function(message_queue * queue) {
 
 			memory_partition * partition = tmessage->message->payload;
 
-			void * deserialized_message = deserialize_message_payload(partition->partition_start, tmessage->message->header->type);
+			void * deserialized_message = deserialize_message_payload(access_partition(partition), tmessage->message->header->type);
 			tmessage->message->is_serialized = false;
 			tmessage->message->payload = deserialized_message;
 
