@@ -676,6 +676,7 @@ client * build_client(int socket, char * ip, int port) {
 	c->socket = socket;
 	c->port = port;
 	c->mutex = malloc(sizeof(sem_t));
+	c->alive = true;
 	sem_init(c->mutex, 0, 1);
 	return c;
 }

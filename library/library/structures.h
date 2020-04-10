@@ -132,6 +132,7 @@ typedef struct {
 	char * ip;
 	int port;
 	sem_t * mutex;
+	int alive;
 } client __attribute__((packed));
 
 typedef struct {

@@ -62,7 +62,7 @@ void queue_thread_function(message_queue * queue);
 //SUBSCRIPTIONS
 int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name);
 int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name);
-void unsubscribe_socket_from_all_queues(int fd);
+void unsubscribe_socket_from_all_queues(int fd, char * ip, int port);
 
 //SERIALIZATION
 _aux_serialization * serialize_message_payload(queue_message * message);
@@ -670,7 +670,7 @@ void queue_thread_function(message_queue * queue) {
 			for(j=0 ; j<queue->subscribers->elements_count ; j++) {
 				client * tsubscriber = list_get(queue->subscribers, j);
 
-				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber)) {
+				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber) && tsubscriber->alive) {
 
 					log_info(LOGGER, "Sending MID %d, to socket %d",
 							tmessage->message->header->message_id,
@@ -765,14 +765,15 @@ int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queu
 		return OPT_FAILED;
 	}
 }
-void unsubscribe_socket_from_all_queues(int fd) {
+void unsubscribe_socket_from_all_queues(int fd, char * ip, int port) {
+	client * tclient = add_or_get_client(fd, ip, port);
 	int i, j;
 	for(i=0 ; i<queues->elements_count ; i++) {
 		message_queue * queue = list_get(queues, i);
 		sem_wait(queue->mutex);
 		for(j=0 ; j<queue->subscribers->elements_count ; j++) {
 			client * sub = list_get(queue->subscribers, j);
-			if(sub->socket == fd) {
+			if(is_same_client(sub, tclient)) {
 				list_remove(queue->subscribers, j);
 				j = queue->subscribers->elements_count + 1;
 			}
@@ -1033,7 +1034,9 @@ int server_function(int socket) {
 	}
 
 	void lost(int fd, char * ip, int port) {
-		unsubscribe_socket_from_all_queues(fd);
+		client * corr_client = add_or_get_client(fd, ip, port);
+		corr_client->alive = false;
+		//unsubscribe_socket_from_all_queues(fd, ip, port);
 	}
 
 	void incoming(int fd, char * ip, int port, net_message_header * header) {
