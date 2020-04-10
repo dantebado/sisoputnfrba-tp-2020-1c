@@ -140,12 +140,12 @@ void setup(int argc, char **argv) {
 
 	queues = list_create();
 
-	init_queue(QUEUE_NEW_POKEMON);
-	init_queue(QUEUE_APPEARED_POKEMON);
-	init_queue(QUEUE_CATCH_POKEMON);
-	init_queue(QUEUE_CAUGHT_POKEMON);
+//	init_queue(QUEUE_NEW_POKEMON);
+//	init_queue(QUEUE_APPEARED_POKEMON);
+//	init_queue(QUEUE_CATCH_POKEMON);
+//	init_queue(QUEUE_CAUGHT_POKEMON);
 	init_queue(QUEUE_GET_POKEMON);
-	init_queue(QUEUE_LOCALIZED_POKEMON);
+//	init_queue(QUEUE_LOCALIZED_POKEMON);
 
 	CONFIG.internal_socket = create_socket();
 	bind_socket(CONFIG.internal_socket, CONFIG.broker_port);
@@ -643,6 +643,7 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	free(aux_str);
 	partition->message = final_message;
 	final_message->message->payload = partition;
+	final_message->payload_address_copy = partition;
 
 	log_info(LOGGER, "Adding message %d to queue %s", message->header->message_id, enum_to_queue_name(queue_name));
 	sem_wait(queue->mutex);
@@ -658,10 +659,14 @@ void queue_thread_function(message_queue * queue) {
 	int i, j;
 	while(1) {
 		sem_wait(queue->mutex);
+		log_info(LOGGER, "Queue %d has %d messages and %d suscriptors",
+				queue->name,
+				queue->messages->elements_count,
+				queue->subscribers->elements_count);
 		for(i=0 ; i<queue->messages->elements_count ; i++) {
 			broker_message * tmessage = list_get(queue->messages, i);
 
-			memory_partition * partition = tmessage->message->payload;
+			memory_partition * partition = tmessage->payload_address_copy;
 
 			void * deserialized_message = deserialize_message_payload(access_partition(partition), tmessage->message->header->type);
 			tmessage->message->is_serialized = false;
@@ -670,7 +675,7 @@ void queue_thread_function(message_queue * queue) {
 			for(j=0 ; j<queue->subscribers->elements_count ; j++) {
 				client * tsubscriber = list_get(queue->subscribers, j);
 
-				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber) && tsubscriber->alive) {
+				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber)) {
 
 					log_info(LOGGER, "Sending MID %d, to socket %d",
 							tmessage->message->header->message_id,
@@ -1035,7 +1040,6 @@ int server_function(int socket) {
 
 	void lost(int fd, char * ip, int port) {
 		client * corr_client = add_or_get_client(fd, ip, port);
-		corr_client->alive = false;
 		//unsubscribe_socket_from_all_queues(fd, ip, port);
 	}
 
@@ -1105,11 +1109,23 @@ int acknowledge_message(int socket, char * ip, int port, int message_id) {
 	log_info(LOGGER, "Socket %d acknowledged message %d", socket, message_id);
 	client * from = add_or_get_client(socket, ip, port);
 
-	int i;
+	int i, index_i;
 	for(i=0 ; i<messages_index->elements_count ; i++) {
 		broker_message * message = list_get(messages_index, i);
 		if(message->message->header->message_id == message_id) {
 			list_add(message->already_acknowledged, from);
+
+			index_i = i;
+			message_queue * queue = find_queue_by_name(message->message->header->queue);
+
+			if(message->already_acknowledged->elements_count ==
+					queue->subscribers->elements_count) {
+
+				memory_partition * partition = message->payload_address_copy;
+				free_memory_partition(partition);
+
+			}
+
 			return OPT_OK;
 		}
 	}
@@ -1179,7 +1195,7 @@ int destroy_unserialized(void * payload, pokemon_message_type type) {
  * */
 
 int is_same_client(client * c1, client * c2) {
-	return	(c1->socket == c2->socket ||
+	return	(/*c1->socket == c2->socket ||*/
 			(c1->port == c2->port && strcmp(c2->ip, c1->ip) == 0));
 }
 client * add_or_get_client(int socket, char * ip, int port) {

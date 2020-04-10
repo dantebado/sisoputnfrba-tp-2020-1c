@@ -11,9 +11,9 @@ void setup(int argc, char **argv);
 int main(int argc, char **argv) {
 	setup(argc, argv);
 
-	int test = true;
+	int test = 0;
 
-	if(test) {
+	if(1) {
 		char * pokemons[] = { "Bulbasaur", "Ivysaur", "Venusaur", "Charmander", "Charmeleon",
 			"Charizard", "Squirtle", "Wartortle", "Blastoise", "Caterpie", "Metapod", "Butterfree", "Weedle", "Pidgeotto", "Pidgey", "Beedrill", "Kakuna",
 			"Nidoran-F", "Sandslash", "Sandshrew", "Raichu", "Pikachu", "Arbok", "Ekans", "Fearow", "Spearow", "Raticate", "Rattata", "Pidgeot",
@@ -27,11 +27,12 @@ int main(int argc, char **argv) {
 		int socket = _command_connect_to_broker(CONFIG);
 		int i, type;
 
-		for(i=1 ; i>0 ; i++) {
+		for(i=0 ; i>=0; i++) {
 
 			char * selected_pokemon = pokemons[rand() % pokemons_c];
 
 			type = rand()%6;
+			type = 4;
 
 			switch(type) {
 				case NEW_POKEMON:;
@@ -59,7 +60,7 @@ int main(int argc, char **argv) {
 					break;
 			}
 
-			usleep(500 * 1000);
+			usleep(1000 * 1000);
 		}
 
 		close_socket(socket);

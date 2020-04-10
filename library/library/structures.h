@@ -132,7 +132,6 @@ typedef struct {
 	char * ip;
 	int port;
 	sem_t * mutex;
-	int alive;
 } client __attribute__((packed));
 
 typedef struct {
@@ -147,6 +146,7 @@ typedef struct {
 	queue_message * message;
 	t_list * already_sent;
 	t_list * already_acknowledged;
+	void * payload_address_copy;
 } broker_message __attribute__((packed));
 
 typedef struct {
