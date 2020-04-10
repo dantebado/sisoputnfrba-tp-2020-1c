@@ -40,6 +40,7 @@ int closest_bs_size(int payload_size);
 memory_partition * get_available_partition_by_payload_size(int payload_size);
 memory_partition * bs_split_partition(memory_partition * partition);
 memory_partition * get_bs_available_partition_by_size(int partition_size);
+memory_partition * get_partitions_available_by_alg(int partition_size);
 memory_partition * get_partitions_available_partition_by_size(int get_partitions_available_partition_by_size);
 memory_partition * find_partition_starting_in(int partition_start);
 memory_partition * partition_create(int number, int size, void * start, broker_message * message);
@@ -178,7 +179,6 @@ void init_memory() {
 		list_add(partitions, partition_create(0, CONFIG.memory_size, main_memory, NULL));
 	sem_post(memory_access_mutex);
 }
-
 char * enum_to_memory_alg(_memory_alg alg) {
 	switch(alg) {
 		case PARTITIONS:
@@ -188,7 +188,6 @@ char * enum_to_memory_alg(_memory_alg alg) {
 	}
 	return "";
 }
-
 char * enum_to_memory_replacement_alg(_remplacement_alg alg) {
 	switch(alg) {
 		case FIFO_REPLACEMENT:
@@ -198,7 +197,6 @@ char * enum_to_memory_replacement_alg(_remplacement_alg alg) {
 	}
 	return "";
 }
-
 char * enum_to_memory_selection_alg(_seek_alg alg) {
 	switch(alg) {
 		case FIRST_FIT:
@@ -208,7 +206,6 @@ char * enum_to_memory_selection_alg(_seek_alg alg) {
 	}
 	return "";
 }
-
 int closest_bs_size(int payload_size) {
 	int potency = 1, acum_result = 2;
 	while(acum_result < payload_size) {
@@ -217,9 +214,11 @@ int closest_bs_size(int payload_size) {
 	}
 	return acum_result;
 }
-
 memory_partition * get_available_partition_by_payload_size(int payload_size) {
 	int partition_size = payload_size;
+	if(partition_size < CONFIG.partition_min_size) {
+		partition_size = CONFIG.partition_min_size;
+	}
 	if(CONFIG.memory_alg == BUDDY_SYSTEM) {
 		partition_size = closest_bs_size(payload_size);
 	}
@@ -235,7 +234,6 @@ memory_partition * get_available_partition_by_payload_size(int payload_size) {
 	}
 	return NULL;
 }
-
 memory_partition * bs_split_partition(memory_partition * partition) {
 	int split_size = partition->partition_size / 2;
 	memory_partition * p1 = partition_create(partition->number, split_size, partition->partition_start, NULL);
@@ -261,7 +259,6 @@ memory_partition * bs_split_partition(memory_partition * partition) {
 	sem_post(memory_access_mutex);
 	return p1;
 }
-
 memory_partition * get_bs_available_partition_by_size(int partition_size) {
 	int i;
 	for(i=0 ; i<partitions->elements_count ; i++) {
@@ -291,88 +288,85 @@ memory_partition * get_bs_available_partition_by_size(int partition_size) {
 	remove_a_partition();
 	return get_bs_available_partition_by_size(partition_size);
 }
-
-memory_partition * get_partitions_available_partition_by_size(int partition_size) {
+memory_partition * get_partitions_available_by_alg(int partition_size) {
 	int start_parsing = main_memory;
 	int i, continue_parsing = false;
+	memory_partition * found_memory = NULL;
+	int best_fit_fragmentation = CONFIG.memory_size;
 
 	do {
 		memory_partition * part = find_partition_starting_in(start_parsing);
 
 		if(part->is_free) {
-			if(part->partition_size == partition_size) {
-				return part;
-			} else if(part->partition_size > partition_size) {
+			if(part->partition_size >= partition_size) {
 
-				sem_wait(memory_access_mutex);
-				t_list * npart = list_create();
-				for(i=0 ; i<part->number ; i++) {
-					list_add(npart, list_get(partitions, i));
+				if(CONFIG.seek_alg == FIRST_FIT) {
+					found_memory = part;
+					start_parsing = main_memory + CONFIG.memory_size;
+				} else if(CONFIG.seek_alg == BEST_FIT) {
+					if( (part->partition_size - partition_size) <= best_fit_fragmentation ) {
+						best_fit_fragmentation = part->partition_size - partition_size;
+						found_memory = part;
+					}
 				}
-				list_add(npart, part);
-				list_add(npart, partition_create(part->number+1, part->partition_size - partition_size,
-						part->partition_start + partition_size, NULL));
-				part->partition_size = partition_size;
-				for(i=part->number + 1; i<partitions->elements_count ; i++) {
-					memory_partition * temp = list_get(partitions, i);
-					temp->number++;
-					list_add(npart, temp);
-				}
-				list_destroy(partitions);
-				partitions = npart;
-				sem_post(memory_access_mutex);
 
-				return part;
 			}
 		}
 
 		start_parsing += part->partition_size;
 		continue_parsing = start_parsing < (int)(main_memory + CONFIG.memory_size);
 	} while(continue_parsing);
+
+	if(found_memory != NULL) {
+
+		if(found_memory->partition_size == partition_size) {
+			return found_memory;
+		}
+
+		sem_wait(memory_access_mutex);
+		t_list * npart = list_create();
+		for(i=0 ; i<found_memory->number ; i++) {
+			list_add(npart, list_get(partitions, i));
+		}
+		list_add(npart, found_memory);
+
+		list_add(npart, partition_create(found_memory->number+1, found_memory->partition_size - partition_size,
+				found_memory->partition_start + partition_size, NULL));
+
+		found_memory->partition_size = partition_size;
+		found_memory->free_size = partition_size;
+
+		for(i=found_memory->number + 1; i<partitions->elements_count ; i++) {
+			memory_partition * temp = list_get(partitions, i);
+			temp->number++;
+			list_add(npart, temp);
+		}
+		list_destroy(partitions);
+		partitions = npart;
+		sem_post(memory_access_mutex);
+
+		return found_memory;
+	}
+	return NULL;
+}
+memory_partition * get_partitions_available_partition_by_size(int partition_size) {
+	memory_partition * ret = get_partitions_available_by_alg(partition_size);
+	if(ret != NULL) {
+		return ret;
+	}
 
 	log_error(LOGGER, "No suitable partition. Compacting...");
 	compact_memory(false);
 
-	start_parsing = main_memory;
-	do {
-		memory_partition * part = find_partition_starting_in(start_parsing);
-
-		if(part->is_free) {
-			if(part->partition_size == partition_size) {
-				return part;
-			} else if(part->partition_size > partition_size) {
-
-				sem_wait(memory_access_mutex);
-				t_list * npart = list_create();
-				for(i=0 ; i<part->number ; i++) {
-					list_add(npart, list_get(partitions, i));
-				}
-				list_add(npart, part);
-				list_add(npart, partition_create(part->number+1, part->partition_size - partition_size,
-						part->partition_start + partition_size, NULL));
-				part->partition_size = partition_size;
-				for(i=part->number + 1; i<partitions->elements_count ; i++) {
-					memory_partition * temp = list_get(partitions, i);
-					temp->number++;
-					list_add(npart, temp);
-				}
-				list_destroy(partitions);
-				partitions = npart;
-				sem_post(memory_access_mutex);
-
-				return part;
-			}
-		}
-
-		start_parsing += part->partition_size;
-		continue_parsing = start_parsing < (int)(main_memory + CONFIG.memory_size);
-	} while(continue_parsing);
+	ret = get_partitions_available_by_alg(partition_size);
+	if(ret != NULL) {
+		return ret;
+	}
 
 	log_error(LOGGER, "No results. Must remove a partition...");
 	remove_a_partition();
 	return get_partitions_available_partition_by_size(partition_size);
 }
-
 memory_partition * find_partition_starting_in(int partition_start) {
 	int i;
 	for(i=0 ; i<partitions->elements_count ; i++) {
@@ -384,7 +378,6 @@ memory_partition * find_partition_starting_in(int partition_start) {
 	}
 	return NULL;
 }
-
 memory_partition * partition_create(int number, int size, void * start, broker_message * message) {
 	memory_partition * partition = malloc(sizeof(memory_partition));
 	partition->number = number;
@@ -397,7 +390,6 @@ memory_partition * partition_create(int number, int size, void * start, broker_m
 	partition->message = message;
 	return partition;
 }
-
 void print_partitions_info() {
 	int i;
 	log_info(LOGGER, "START PARTIITON DATA");
@@ -409,7 +401,6 @@ void print_partitions_info() {
 
 	log_info(LOGGER, "END  PARTIITON  DATA");
 }
-
 void print_partition_info(memory_partition * partition) {
 	log_info(LOGGER, "\t\t%d SIZE %d Bytes, Free %d LA %d @ %d - %d", partition->number,
 			partition->partition_size, partition->is_free,
@@ -417,7 +408,6 @@ void print_partition_info(memory_partition * partition) {
 			partition->partition_start,
 			partition->partition_start + partition->partition_size);
 }
-
 void free_memory_partition(memory_partition * partition) {
 	message_queue * queue = find_queue_by_name(partition->message->message->header->queue);
 	sem_wait(queue->mutex);
@@ -434,6 +424,7 @@ void free_memory_partition(memory_partition * partition) {
 
 	sem_wait(memory_access_mutex);
 	partition->free_size = partition->partition_size;
+	partition->message = NULL;
 	partition->is_free = true;
 
 	memory_free_space += partition->partition_size;
@@ -443,7 +434,6 @@ void free_memory_partition(memory_partition * partition) {
 	}
 	sem_post(memory_access_mutex);
 }
-
 memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 	log_info(LOGGER, "Writing %d bytes", payload_size);
 
@@ -464,7 +454,6 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 
 	return the_partition;
 }
-
 void compact_memory(int already_reserved_mutex) {
 	if(!already_reserved_mutex){
 		sem_wait(memory_access_mutex);
@@ -549,7 +538,6 @@ void compact_memory(int already_reserved_mutex) {
 	}
 	log_info(LOGGER, "Memory has been compacted");
 }
-
 void remove_a_partition() {
 	int i;
 	memory_partition * to_remove = NULL;
@@ -584,12 +572,10 @@ void remove_a_partition() {
 	}
 	free_memory_partition(to_remove);
 }
-
 void * access_partition(memory_partition * partition) {
 	partition->access_time = get_time_counter();
 	return partition->partition_start;
 }
-
 int get_time_counter() {
 	sem_wait(time_counter_mutex);
 	time_counter++;
@@ -616,7 +602,6 @@ void init_queue(_message_queue_name name) {
 
 	log_info(LOGGER, "Created List %s & Server Started", enum_to_queue_name(name));
 }
-
 message_queue * find_queue_by_name(_message_queue_name name) {
 	int i;
 	for(i=0 ; i<queues->elements_count ; i++) {
@@ -627,7 +612,6 @@ message_queue * find_queue_by_name(_message_queue_name name) {
 	}
 	return NULL;
 }
-
 int add_message_to_queue(queue_message * message, _message_queue_name queue_name) {
 	message_queue * queue = find_queue_by_name(queue_name);
 	if(queue == NULL) {
@@ -670,7 +654,6 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	log_info(LOGGER, "\t\tAdded");
 	return OPT_OK;
 }
-
 void queue_thread_function(message_queue * queue) {
 	int i, j;
 	while(1) {
@@ -744,7 +727,6 @@ int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_na
 		return OPT_FAILED;
 	}
 }
-
 int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name) {
 	log_info(LOGGER, "Socket %d unsubscribing from queue %d", socket, queue_name);
 
@@ -783,7 +765,6 @@ int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queu
 		return OPT_FAILED;
 	}
 }
-
 void unsubscribe_socket_from_all_queues(int fd) {
 	int i, j;
 	for(i=0 ; i<queues->elements_count ; i++) {
@@ -928,7 +909,6 @@ _aux_serialization * serialize_message_payload(queue_message * message) {
 	message->is_serialized = true;
 	return serialized;
 }
-
 void * deserialize_message_payload(void * payload, pokemon_message_type type) {
 	void * return_pointer;
 
@@ -1118,7 +1098,6 @@ int server_function(int socket) {
 int generate_message_id() {
 	return last_message_id++;
 }
-
 int acknowledge_message(int socket, char * ip, int port, int message_id) {
 	log_info(LOGGER, "Socket %d acknowledged message %d", socket, message_id);
 	client * from = add_or_get_client(socket, ip, port);
@@ -1133,7 +1112,6 @@ int acknowledge_message(int socket, char * ip, int port, int message_id) {
 	}
 	return OPT_FAILED;
 }
-
 int message_was_sent_to_susbcriber(broker_message * tmessage, client * subscriber) {
 	int i;
 	for(i=0 ; i<tmessage->already_sent->elements_count ; i++) {
@@ -1144,7 +1122,6 @@ int message_was_sent_to_susbcriber(broker_message * tmessage, client * subscribe
 	}
 	return 0;
 }
-
 int destroy_unserialized(void * payload, pokemon_message_type type) {
 	int i;
 	switch(type) {
@@ -1202,7 +1179,6 @@ int is_same_client(client * c1, client * c2) {
 	return	(c1->socket == c2->socket ||
 			(c1->port == c2->port && strcmp(c2->ip, c1->ip) == 0));
 }
-
 client * add_or_get_client(int socket, char * ip, int port) {
 	int i;
 	for(i=0 ; i<clients->elements_count ; i++) {
