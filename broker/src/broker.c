@@ -220,6 +220,9 @@ int closest_bs_size(int payload_size) {
 
 memory_partition * get_available_partition_by_payload_size(int payload_size) {
 	int partition_size = payload_size;
+	if(partition_size < CONFIG.partition_min_size) {
+		partition_size = CONFIG.partition_min_size;
+	}
 	if(CONFIG.memory_alg == BUDDY_SYSTEM) {
 		partition_size = closest_bs_size(payload_size);
 	}
