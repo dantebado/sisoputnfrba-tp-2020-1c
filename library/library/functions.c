@@ -585,7 +585,7 @@ void print_pokemon_message(queue_message * message) {
 		case NEW_POKEMON:;
 			new_pokemon_message * npm = message->payload;
 
-			char * name = malloc(sizeof(char) * (npm->name_length + 1));
+			name = malloc(sizeof(char) * (npm->name_length + 1));
 			memcpy(name, npm->pokemon, sizeof(char) * (npm->name_length + 1));
 			name[npm->name_length] = '\0';
 

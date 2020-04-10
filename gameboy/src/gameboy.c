@@ -11,11 +11,16 @@ void setup(int argc, char **argv);
 int main(int argc, char **argv) {
 	setup(argc, argv);
 
-	int test = false;
+	int test = true;
 
 	if(test) {
-		char * pokemons[] = { "Pikachu", "Charmander", "Squirtle", "Pidgey" };
-		int pokemons_c = 4;
+		char * pokemons[] = { "Bulbasaur", "Ivysaur", "Venusaur", "Charmander", "Charmeleon",
+			"Charizard", "Squirtle", "Wartortle", "Blastoise", "Caterpie", "Metapod", "Butterfree", "Weedle", "Pidgeotto", "Pidgey", "Beedrill", "Kakuna",
+			"Nidoran-F", "Sandslash", "Sandshrew", "Raichu", "Pikachu", "Arbok", "Ekans", "Fearow", "Spearow", "Raticate", "Rattata", "Pidgeot",
+			"Ninetales", "Vulpix", "Clefable", "Clefairy", "Nidoking", "Nidorino", "Nidoran-M", "Nidoqueen", "Nidorina"
+		};
+		int pokemons_c = (int) sizeof(pokemons) /
+				sizeof(pokemons[0]);
 
 		srand (time(NULL));
 
@@ -54,7 +59,7 @@ int main(int argc, char **argv) {
 					break;
 			}
 
-			usleep(0.5 * 1000 * 1000);
+			usleep(500 * 1000);
 		}
 
 		close_socket(socket);
