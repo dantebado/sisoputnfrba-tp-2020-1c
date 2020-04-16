@@ -13,7 +13,7 @@ int main(int argc, char **argv) {
 
 	int test = 0;
 
-	if(1) {
+	if(test) {
 		char * pokemons[] = { "Bulbasaur", "Ivysaur", "Venusaur", "Charmander", "Charmeleon",
 			"Charizard", "Squirtle", "Wartortle", "Blastoise", "Caterpie", "Metapod", "Butterfree", "Weedle", "Pidgeotto", "Pidgey", "Beedrill", "Kakuna",
 			"Nidoran-F", "Sandslash", "Sandshrew", "Raichu", "Pikachu", "Arbok", "Ekans", "Fearow", "Spearow", "Raticate", "Rattata", "Pidgeot",

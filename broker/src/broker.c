@@ -140,12 +140,12 @@ void setup(int argc, char **argv) {
 
 	queues = list_create();
 
-//	init_queue(QUEUE_NEW_POKEMON);
-//	init_queue(QUEUE_APPEARED_POKEMON);
-//	init_queue(QUEUE_CATCH_POKEMON);
-//	init_queue(QUEUE_CAUGHT_POKEMON);
+	init_queue(QUEUE_NEW_POKEMON);
+	init_queue(QUEUE_APPEARED_POKEMON);
+	init_queue(QUEUE_CATCH_POKEMON);
+	init_queue(QUEUE_CAUGHT_POKEMON);
 	init_queue(QUEUE_GET_POKEMON);
-//	init_queue(QUEUE_LOCALIZED_POKEMON);
+	init_queue(QUEUE_LOCALIZED_POKEMON);
 
 	CONFIG.internal_socket = create_socket();
 	bind_socket(CONFIG.internal_socket, CONFIG.broker_port);
