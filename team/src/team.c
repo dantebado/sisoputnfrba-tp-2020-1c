@@ -4,6 +4,10 @@
 team_config CONFIG;
 t_list * trainers;
 
+t_list * blocked_queue;
+t_list * ready_queue;
+trainer * executing_trainer;
+
 //PROTOTYPES
 void setup(int argc, char **argv);
 int broker_server_function();
@@ -217,3 +221,63 @@ void setup(int argc, char **argv) {
 	pthread_join(CONFIG.server_thread, NULL);
 	pthread_join(CONFIG.broker_thread, NULL);
 }
+
+
+//Hace falta el estado new?
+void sort_queues(){
+
+	//OJO ACA
+	//Hay entrenadores haciendo nada?
+	for(int i=0; i<blocked_queue->elements_count; i++){
+		trainer * t = list_get(blocked_queue, i);
+		t->status = READY;
+		for(int j=0; j<t->pokemons->elements_count; j++){ //Esta queriendo agarrar un pokemon?
+			pokemon_allocation * pa = list_get(t->pokemons, j);
+			if(pa->status == WAITING){
+				t->status = BLOCKED;
+			}
+		}
+		if(t->status == READY){
+			t->estimation = estimate(t);
+			list_add(ready_queue, list_remove(blocked_queue, i));
+		}
+	}
+
+	switch(CONFIG.planning_alg){
+		case FIFO_PLANNING: //Queda todo igual
+			break;
+		case SJF_CD:
+			if(executing_trainer){ //Me fijo si hay un entrenador ejecutando
+				list_add(ready_queue, executing_trainer);
+				executing_trainer = NULL;
+				sort_by_burst();
+			}
+			break;
+		case SJF_SD:
+			sort_by_burst();
+			break;
+		case RR:
+			sort_by_RR();
+	}
+
+	//Hay que correr el primero en la cola de ready
+	if(!list_is_empty(ready_queue) && executing_trainer == NULL){
+		executing_trainer = list_remove(ready_queue, 0);
+		executing_trainer->status = EXEC;
+	}
+}
+
+void sort_by_burst(){
+
+}
+
+void sort_by_RR(){
+
+}
+
+void estimate(trainer t){
+
+}
+
+
+

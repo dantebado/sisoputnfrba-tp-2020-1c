@@ -195,7 +195,29 @@ typedef struct {
 	int y;
 	t_list * pokemons;
 	t_list * targets;
+
+	float estimation;
+	trainer_status status = NEW	;
 } trainer __attribute__((packed));
+
+typedef enum{
+	NEW,
+	READY,
+	EXEC,
+	BLOCKED,
+	EXIT
+} trainer_status;
+
+typedef struct{
+	localized_pokemon_message lpm;
+	pokemon_status status;
+} pokemon_allocation;
+
+typedef enum{
+	CONTROLLED,
+	WAITING,
+	RELEASED
+} pokemon_status;
 
 typedef enum {
 	FIFO_PLANNING,
