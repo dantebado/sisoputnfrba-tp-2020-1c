@@ -4,14 +4,30 @@
 team_config CONFIG;
 t_list * trainers;
 
-t_list * blocked_queue;
+//COLAS
+t_list * new_queue;
 t_list * ready_queue;
+t_list * exec_threads;
+t_list * blocked_queue;
+t_list * exit_queue;
+
+//ENTRENADOR EJECUTANDO
 trainer * executing_trainer;
+
+//SEMAFOROS
+pthread_mutex_t ready_queue_mutex;
 
 //PROTOTYPES
 void setup(int argc, char **argv);
 int broker_server_function();
 int server_function();
+
+void executing();
+void sort_queues();
+void sort_by_burst();
+void sort_by_RR();
+void estimate(trainer t);
+
 
 int main(int argc, char **argv) {
 	setup(argc, argv);
@@ -138,6 +154,8 @@ void setup(int argc, char **argv) {
 	char * targets = config_get_string_value(_CONFIG, "OBJETIVOS_ENTRENADORES");
 
 	trainers = list_create();
+	new_queue = list_create();
+
 	if(trainers_count > 0) {
 		int i;
 		for(aux_counter=0 ; aux_counter<trainers_count ; aux_counter++) {
@@ -188,6 +206,9 @@ void setup(int argc, char **argv) {
 				list_add(t.targets, string_get_string_as_array(this_targets)[i]);
 			}
 
+			//Agrego al entrenador recien entrado a la cola de nuevos
+			list_add(new_queue, t);
+
 			/*printf("ENTRENADOR %d", aux_counter);
 			printf("\n\tX = %d", t.x);
 			printf("\n\tY = %d", t.y);
@@ -204,6 +225,20 @@ void setup(int argc, char **argv) {
 		}
 	}
 
+	//new_queue = list_create();
+	ready_queue = list_create();
+	blocked_queue = list_create();
+	exit_queue = list_create();
+
+	/*
+	if(trainers_count > 0){
+		int i;
+		for(aux_counter=0; aux_counter < trainers_count; aux_counter++){
+			Hay que agregar los entrenadores que entraron a la cola de nuevos
+		}
+	}
+	*/
+
 	CONFIG.broker_socket = create_socket();
 	connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port);
 
@@ -218,8 +253,24 @@ void setup(int argc, char **argv) {
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, CONFIG.broker_socket);
 
+	//Ya que habra varios entrenadores ejecutando, seran varios hilos...
+	for(int exec_t = 0; exec_t < trainers_count; exec_t++){
+		pthread_t thread_exec;
+		pthread_create(&thread_exec, NULL, executing, exec_t);
+		list_add(exec_threads, &thread_exec);
+	}
+
+	//Inicializo el semaforo para la cola de ready, ya que solo puede ejecutar uno a la vez
+	init_normal_mutex(&ready_queue_mutex, "READY_QUEUE");
+
 	pthread_join(CONFIG.server_thread, NULL);
 	pthread_join(CONFIG.broker_thread, NULL);
+
+	//Creo los hilos de los entrenadores, ya que son varios que van a estar ejecutando
+	for(int exec_t = 0; exec_t < trainers_count; exec_t++){
+		pthread_t * t = list_get(exec_threads, exec_t);
+		pthread_join(*t, NULL);
+	}
 }
 
 
