@@ -1,5 +1,7 @@
 # La Ultima Cursada de Sistemas Operativos
 
+![](Logo.png)
+
 ## Integrantes
 
 * *Nicolas Molina*
