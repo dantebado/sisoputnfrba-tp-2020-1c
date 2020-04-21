@@ -197,16 +197,28 @@ typedef struct {
 	t_list * targets;
 
 	float estimation;
-	trainer_status status = NEW	;
+	trainer_status status = NEW_TRAINER	;
 } trainer __attribute__((packed));
 
 typedef enum{
-	NEW,
-	READY,
-	EXEC,
-	BLOCKED,
-	EXIT
+	NEW_TRAINER,
+	READY_TRAINER,
+	EXEC_TRAINER,
+	BLOCKED_TRAINER,
+	EXIT_TRAINER
 } trainer_status;
+
+typedef struct{
+	int quantum_counter;
+	trainer_action_status status;
+} trainer_action;
+
+typedef enum{
+	NEW_ACTION,
+	READY_ACTION,
+	EXEC_ACTION,
+	EXIT_ACTION
+} trainer_action_status;
 
 typedef struct{
 	localized_pokemon_message lpm;
@@ -214,9 +226,9 @@ typedef struct{
 } pokemon_allocation;
 
 typedef enum{
-	CONTROLLED,
-	WAITING,
-	RELEASED
+	BLOCKED_POKEMON,
+	WAITING_POKEMON,
+	RELEASED_POKEMON
 } pokemon_status;
 
 typedef enum {

@@ -2,12 +2,12 @@
 
 //GLOBAL VARIABLES
 team_config CONFIG;
-t_list * trainers;
+t_list * trainers; //Listo
 
 //COLAS
-t_list * new_queue;
+t_list * new_queue; //Listo
 t_list * ready_queue;
-t_list * exec_threads;
+t_list * exec_threads; //Creado
 t_list * blocked_queue;
 t_list * exit_queue;
 
@@ -34,6 +34,8 @@ int main(int argc, char **argv) {
 
 	return EXIT_SUCCESS;
 }
+
+//Recibo mensaje, estoy ejecutando. Como salto de esto al exec??
 
 int process_pokemon_message(queue_message * message, int from_broker) {
 	print_pokemon_message(message);
@@ -234,7 +236,7 @@ void setup(int argc, char **argv) {
 	if(trainers_count > 0){
 		int i;
 		for(aux_counter=0; aux_counter < trainers_count; aux_counter++){
-			Hay que agregar los entrenadores que entraron a la cola de nuevos
+			Hay que agregar los entrenadores que entraron a la cola de nuevos. En la funcion de arriba estan
 		}
 	}
 	*/
@@ -281,14 +283,14 @@ void sort_queues(){
 	//Hay entrenadores haciendo nada?
 	for(int i=0; i<blocked_queue->elements_count; i++){
 		trainer * t = list_get(blocked_queue, i);
-		t->status = READY;
+		t->status = READY_TRAINER;
 		for(int j=0; j<t->pokemons->elements_count; j++){ //Esta queriendo agarrar un pokemon?
 			pokemon_allocation * pa = list_get(t->pokemons, j);
-			if(pa->status == WAITING){
-				t->status = BLOCKED;
+			if(pa->status == WAITING_POKEMON){
+				t->status = BLOCKED_TRAINER;
 			}
 		}
-		if(t->status == READY){
+		if(t->status == READY_TRAINER){
 			t->estimation = estimate(t);
 			list_add(ready_queue, list_remove(blocked_queue, i));
 		}
@@ -314,7 +316,7 @@ void sort_queues(){
 	//Hay que correr el primero en la cola de ready
 	if(!list_is_empty(ready_queue) && executing_trainer == NULL){
 		executing_trainer = list_remove(ready_queue, 0);
-		executing_trainer->status = EXEC;
+		executing_trainer->status = EXEC_TRAINER;
 	}
 }
 
@@ -329,6 +331,50 @@ void sort_by_RR(){
 void estimate(trainer t){
 
 }
+
+void executing(int i){ //El i es por el id de entrenador
+	//Es el entrenador ejecutando acciones
+
+	inform_thread_id("Executing");
+	trainer_action * this_trainer_action = NULL;
+
+	while(1){
+		if(this_trainer_action == NULL){
+
+			//OJO!!!
+			lock_mutex(&ready_queue_mutex);
+			if(ready_queue->elements_count != 0){
+				this_trainer_action = list_get(ready_queue, 0);
+				list_remove(ready_queue, 0);
+			}
+			unlock_mutex(&ready_queue_mutex);
+		}else{
+			this_trainer_action->status = EXEC_ACTION;
+			log_info("RUNNING TRAINER %d\n", i);
+			if(exec_trainer_action(this_trainer_action)){
+				this_trainer_action->quantum_counter++;
+				if(1){ //COMO SACO LA CANTIDAD DE ACCIONES QUE LE FALTAN AL ENTRENADOR?
+					this_trainer_action->status = EXIT_TRAINER;
+					list_add(exit_queue, this_trainer_action); //?
+					log_info("TRAINER %d HAS FINISHED\n", i);
+					this_trainer_action = NULL;
+				}else{
+
+				}
+			}
+		}
+	}
+}
+
+void exec_trainer_action(trainer_action * ta){
+
+}
+
+
+
+
+
+
 
 
 
