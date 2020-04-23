@@ -15,7 +15,7 @@ t_list * exit_queue;
 trainer * executing_trainer;
 
 //SEMAFOROS
-pthread_mutex_t ready_queue_mutex;
+sem_t * ready_queue_mutex;
 
 //PROTOTYPES
 void setup(int argc, char **argv);
@@ -157,6 +157,10 @@ void setup(int argc, char **argv) {
 
 	trainers = list_create();
 	new_queue = list_create();
+	ready_queue = list_create();
+	blocked_queue = list_create();
+	exit_queue = list_create();
+
 
 	if(trainers_count > 0) {
 		int i;
@@ -208,8 +212,8 @@ void setup(int argc, char **argv) {
 				list_add(t.targets, string_get_string_as_array(this_targets)[i]);
 			}
 
-			//Agrego al entrenador recien entrado a la cola de nuevos
-			list_add(new_queue, t);
+			//Agrego al entrenador recien entrado a la cola de nuevos ??????
+			//list_add(new_queue, t);
 
 			/*printf("ENTRENADOR %d", aux_counter);
 			printf("\n\tX = %d", t.x);
@@ -226,11 +230,6 @@ void setup(int argc, char **argv) {
 			printf(")\n\n");*/
 		}
 	}
-
-	//new_queue = list_create();
-	ready_queue = list_create();
-	blocked_queue = list_create();
-	exit_queue = list_create();
 
 	/*
 	if(trainers_count > 0){
@@ -275,6 +274,9 @@ void setup(int argc, char **argv) {
 	}
 }
 
+float estimate(trainer*t){
+	return 1.1;
+}
 
 //Hace falta el estado new?
 void sort_queues(){
@@ -328,41 +330,63 @@ void sort_by_RR(){
 
 }
 
-void estimate(trainer t){
-
-}
-
 void executing(int i){ //El i es por el id de entrenador
 	//Es el entrenador ejecutando acciones
 
 	inform_thread_id("Executing");
 	trainer_action * this_trainer_action = NULL;
 
+	sem_init(&ready_queue_mutex, 0, 1);
+
 	while(1){
 		if(this_trainer_action == NULL){
 
-			//OJO!!!
-			lock_mutex(&ready_queue_mutex);
+			//Guarda los semaforos
+			sem_wait(&ready_queue_mutex);
 			if(ready_queue->elements_count != 0){
 				this_trainer_action = list_get(ready_queue, 0);
 				list_remove(ready_queue, 0);
 			}
-			unlock_mutex(&ready_queue_mutex);
+			sem_post(&ready_queue_mutex);
+
 		}else{
 			this_trainer_action->status = EXEC_ACTION;
 			log_info("RUNNING TRAINER %d\n", i);
+
 			if(exec_trainer_action(this_trainer_action)){
 				this_trainer_action->quantum_counter++;
-				if(1){ //COMO SACO LA CANTIDAD DE ACCIONES QUE LE FALTAN AL ENTRENADOR?
+
+				if(list_is_empty(executing_trainer->targets)){ //GUARDA QUE NO ME GUSTA EL CAMBIO DE LISTAS
+					//Salida del entrenador por fin de acciones que debe realizar
 					this_trainer_action->status = EXIT_TRAINER;
-					list_add(exit_queue, this_trainer_action); //?
+					list_add(exit_queue, executing_trainer); //?
 					log_info("TRAINER %d HAS FINISHED\n", i);
+					list_remove(exec_threads, i);
 					this_trainer_action = NULL;
 				}else{
+					if(this_trainer_action->quantum_counter == CONFIG.quantum){
+						//Salida del entrenador por fin de quantum
+						sem_wait(&ready_queue_mutex);
+							this_trainer_action->status = READY_ACTION;
+							list_add(ready_queue, this_trainer_action);
+						sem_post(&ready_queue_mutex);
 
+						this_trainer_action->quantum_counter = 0;
+						log_info("QUANTUM FINISHED FOR TRAINER %d\n", i);
+						this_trainer_action = NULL;
+					}else{
+						//Nada, el entrenador continua
+					}
 				}
+			}else{
+				//Hubo error
+				this_trainer_action->status = EXIT_ACTION;
+				list_add(exit_queue, this_trainer_action);
+				log_info("ACTION COULD NOT BE RESOLVED FOR TRAINER %d\n", i);
+				this_trainer_action = NULL;
 			}
 		}
+		usleep(CONFIG.cpu_delay * 1000);
 	}
 }
 

@@ -190,16 +190,6 @@ typedef struct {
  *  TEAM
  *
  * */
-typedef struct {
-	int x;
-	int y;
-	t_list * pokemons;
-	t_list * targets;
-
-	float estimation;
-	trainer_status status = NEW_TRAINER	;
-} trainer __attribute__((packed));
-
 typedef enum{
 	NEW_TRAINER,
 	READY_TRAINER,
@@ -208,10 +198,15 @@ typedef enum{
 	EXIT_TRAINER
 } trainer_status;
 
-typedef struct{
-	int quantum_counter;
-	trainer_action_status status;
-} trainer_action;
+typedef struct {
+	int x;
+	int y;
+	t_list * pokemons;
+	t_list * targets;
+
+	float estimation;
+	trainer_status status;
+} trainer __attribute__((packed));
 
 typedef enum{
 	NEW_ACTION,
@@ -221,15 +216,20 @@ typedef enum{
 } trainer_action_status;
 
 typedef struct{
-	localized_pokemon_message lpm;
-	pokemon_status status;
-} pokemon_allocation;
+	int quantum_counter;
+	trainer_action_status status;
+} trainer_action;
 
 typedef enum{
 	BLOCKED_POKEMON,
 	WAITING_POKEMON,
 	RELEASED_POKEMON
 } pokemon_status;
+
+typedef struct{
+	localized_pokemon_message lpm;
+	pokemon_status status;
+} pokemon_allocation;
 
 typedef enum {
 	FIFO_PLANNING,
