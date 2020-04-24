@@ -2,17 +2,19 @@
 
 //GLOBAL VARIABLES
 team_config CONFIG;
-t_list * trainers; //Listo
+t_list * trainers;
 
 //COLAS
-t_list * new_queue; //Listo
+t_list * new_queue;
 t_list * ready_queue;
-t_list * exec_threads; //Creado
+t_list * exec_threads;
 t_list * blocked_queue;
 t_list * exit_queue;
 
+t_list * allocations;
+
 //ENTRENADOR EJECUTANDO
-trainer * executing_trainer;
+trainer_action * executing_trainer;
 
 //SEMAFOROS
 sem_t * ready_queue_mutex;
@@ -22,11 +24,13 @@ void setup(int argc, char **argv);
 int broker_server_function();
 int server_function();
 
-void executing();
+void executing(trainer*t);
 void sort_queues();
 void sort_by_burst();
 void sort_by_RR();
-void estimate(trainer t);
+float estimate(trainer_action*t);
+void start_running_trainer(trainer*t);
+int exec_trainer_action(trainer_action * ta);
 
 
 int main(int argc, char **argv) {
@@ -120,6 +124,12 @@ int server_function() {
 	return 0;
 }
 
+void start_running_trainer(trainer*t){
+	pthread_t thread_exec;
+	pthread_create(&thread_exec, NULL, executing, t);
+	list_add(exec_threads, &thread_exec);
+}
+
 void setup(int argc, char **argv) {
 	char * cfg_path = string_new();
 	string_append(&cfg_path, (argc > 1) ? argv[1] : "team");
@@ -161,6 +171,7 @@ void setup(int argc, char **argv) {
 	blocked_queue = list_create();
 	exit_queue = list_create();
 
+	allocations = list_create();
 
 	if(trainers_count > 0) {
 		int i;
@@ -212,6 +223,10 @@ void setup(int argc, char **argv) {
 				list_add(t.targets, string_get_string_as_array(this_targets)[i]);
 			}
 
+			//Se puede pasar el entrenador de esta forma o va con puntero??
+			t.id = aux_counter;
+			start_running_trainer(&t);
+
 			//Agrego al entrenador recien entrado a la cola de nuevos ??????
 			//list_add(new_queue, t);
 
@@ -256,13 +271,8 @@ void setup(int argc, char **argv) {
 
 	//Ya que habra varios entrenadores ejecutando, seran varios hilos...
 	for(int exec_t = 0; exec_t < trainers_count; exec_t++){
-		pthread_t thread_exec;
-		pthread_create(&thread_exec, NULL, executing, exec_t);
-		list_add(exec_threads, &thread_exec);
-	}
 
-	//Inicializo el semaforo para la cola de ready, ya que solo puede ejecutar uno a la vez
-	init_normal_mutex(&ready_queue_mutex, "READY_QUEUE");
+	}
 
 	pthread_join(CONFIG.server_thread, NULL);
 	pthread_join(CONFIG.broker_thread, NULL);
@@ -274,8 +284,25 @@ void setup(int argc, char **argv) {
 	}
 }
 
-float estimate(trainer*t){
-	return 1.1;
+float estimate(trainer_action*t){
+	int alpha = CONFIG.initial_estimate;
+	float estimation = (alpha/100)*(t->quantum_counter) + (1-(alpha/100))*(t->last_estimation);
+	t->quantum_counter = 0;
+	//log_info()
+	return estimation;
+}
+
+void sort_by_burst(){
+	int sort_burst_trainer(trainer_action * a_trainer, trainer_action * another_trainer){
+		return (a_trainer->estimation <= another_trainer->estimation);
+	}
+	if(list_size(ready_queue) > 0){
+		list_sort(ready_queue, (void*)sort_burst_trainer);
+	}
+}
+
+void sort_by_RR(){
+
 }
 
 //Hace falta el estado new?
@@ -284,20 +311,22 @@ void sort_queues(){
 	//OJO ACA
 	//Hay entrenadores haciendo nada?
 	for(int i=0; i<blocked_queue->elements_count; i++){
-		trainer * t = list_get(blocked_queue, i);
-		t->status = READY_TRAINER;
-		for(int j=0; j<t->pokemons->elements_count; j++){ //Esta queriendo agarrar un pokemon?
-			pokemon_allocation * pa = list_get(t->pokemons, j);
+		trainer_action * ta = list_get(blocked_queue, i);
+		ta->status = READY_ACTION;
+		for(int j=0; j < allocations->elements_count; j++){ //Esta queriendo agarrar un pokemon?
+			pokemon_allocation * pa = list_get(allocations, j);
 			if(pa->status == WAITING_POKEMON){
-				t->status = BLOCKED_TRAINER;
+				ta->status = BLOCKED_ACTION;
 			}
 		}
-		if(t->status == READY_TRAINER){
-			t->estimation = estimate(t);
+		if(ta->status == READY_ACTION){
+			ta->estimation = estimate(ta);
+			ta->last_estimation = ta->estimation;
 			list_add(ready_queue, list_remove(blocked_queue, i));
 		}
 	}
 
+	//Hay que cambiar los algoritmos de planificacion en tiempo real
 	switch(CONFIG.planning_alg){
 		case FIFO_PLANNING: //Queda todo igual
 			break;
@@ -318,61 +347,59 @@ void sort_queues(){
 	//Hay que correr el primero en la cola de ready
 	if(!list_is_empty(ready_queue) && executing_trainer == NULL){
 		executing_trainer = list_remove(ready_queue, 0);
-		executing_trainer->status = EXEC_TRAINER;
+		executing_trainer->status = EXEC_ACTION;
 	}
 }
 
-void sort_by_burst(){
+int exec_trainer_action(trainer_action * ta){
 
 }
 
-void sort_by_RR(){
-
-}
-
-void executing(int i){ //El i es por el id de entrenador
+void executing(trainer*t){
 	//Es el entrenador ejecutando acciones
 
-	inform_thread_id("Executing");
 	trainer_action * this_trainer_action = NULL;
 
 	sem_init(&ready_queue_mutex, 0, 1);
 
 	while(1){
 		if(this_trainer_action == NULL){
-
 			//Guarda los semaforos
 			sem_wait(&ready_queue_mutex);
-			if(ready_queue->elements_count != 0){
-				this_trainer_action = list_get(ready_queue, 0);
-				list_remove(ready_queue, 0);
+			{
+				if(ready_queue->elements_count != 0){
+					this_trainer_action = list_get(ready_queue, 0);
+					list_remove(ready_queue, 0);
+				}
 			}
 			sem_post(&ready_queue_mutex);
-
 		}else{
 			this_trainer_action->status = EXEC_ACTION;
-			log_info("RUNNING TRAINER %d\n", i);
+			log_info("RUNNING TRAINER %d\n", t->id);
 
 			if(exec_trainer_action(this_trainer_action)){
 				this_trainer_action->quantum_counter++;
 
-				if(list_is_empty(executing_trainer->targets)){ //GUARDA QUE NO ME GUSTA EL CAMBIO DE LISTAS
+				if(list_is_empty(t->targets)){ //GUARDA QUE NO ME GUSTA EL CAMBIO DE LISTAS
 					//Salida del entrenador por fin de acciones que debe realizar
-					this_trainer_action->status = EXIT_TRAINER;
-					list_add(exit_queue, executing_trainer); //?
-					log_info("TRAINER %d HAS FINISHED\n", i);
-					list_remove(exec_threads, i);
+					this_trainer_action->status = EXIT_ACTION;
+					list_add(exit_queue, executing_trainer);
+					log_info("TRAINER %d HAS FINISHED\n", t->id);
+
+					list_remove(exec_threads, t->id); //Seguro?
 					this_trainer_action = NULL;
 				}else{
 					if(this_trainer_action->quantum_counter == CONFIG.quantum){
 						//Salida del entrenador por fin de quantum
 						sem_wait(&ready_queue_mutex);
+						{
 							this_trainer_action->status = READY_ACTION;
 							list_add(ready_queue, this_trainer_action);
+						}
 						sem_post(&ready_queue_mutex);
 
 						this_trainer_action->quantum_counter = 0;
-						log_info("QUANTUM FINISHED FOR TRAINER %d\n", i);
+						log_info("QUANTUM FINISHED FOR TRAINER %d\n", t->id);
 						this_trainer_action = NULL;
 					}else{
 						//Nada, el entrenador continua
@@ -382,7 +409,7 @@ void executing(int i){ //El i es por el id de entrenador
 				//Hubo error
 				this_trainer_action->status = EXIT_ACTION;
 				list_add(exit_queue, this_trainer_action);
-				log_info("ACTION COULD NOT BE RESOLVED FOR TRAINER %d\n", i);
+				log_info("ACTION COULD NOT BE RESOLVED FOR TRAINER %d\n", t->id);
 				this_trainer_action = NULL;
 			}
 		}
@@ -390,9 +417,6 @@ void executing(int i){ //El i es por el id de entrenador
 	}
 }
 
-void exec_trainer_action(trainer_action * ta){
-
-}
 
 
 

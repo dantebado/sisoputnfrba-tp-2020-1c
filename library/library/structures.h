@@ -190,33 +190,30 @@ typedef struct {
  *  TEAM
  *
  * */
-typedef enum{
-	NEW_TRAINER,
-	READY_TRAINER,
-	EXEC_TRAINER,
-	BLOCKED_TRAINER,
-	EXIT_TRAINER
-} trainer_status;
 
 typedef struct {
+	int id;
 	int x;
 	int y;
 	t_list * pokemons;
 	t_list * targets;
-
-	float estimation;
-	trainer_status status;
 } trainer __attribute__((packed));
 
 typedef enum{
 	NEW_ACTION,
 	READY_ACTION,
 	EXEC_ACTION,
+	BLOCKED_ACTION,
 	EXIT_ACTION
 } trainer_action_status;
 
 typedef struct{
 	int quantum_counter;
+	int waiting_counter;
+
+	float estimation;
+	float last_estimation;
+
 	trainer_action_status status;
 } trainer_action;
 
