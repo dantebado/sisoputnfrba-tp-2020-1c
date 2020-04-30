@@ -17,6 +17,8 @@ int _send_stream(int socket, void * stream, int size);
 void * _recv_stream(int socket, int size);
 char * _recv_stream_add_string_end(int socket, int size);
 
+//void custom_print(const char* message, ...);
+
 /*PRIMITIVE*/
 
 int send_char(int socket, char value);

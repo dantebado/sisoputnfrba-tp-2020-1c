@@ -15,6 +15,8 @@ t_list * exit_queue;
 t_list * required_pokemons;
 t_list * allocated_pokemons;
 
+t_list * catch_msgs_ids;
+
 //EXECUTING TRAINERS
 trainer_action * executing_trainer;
 
@@ -36,10 +38,15 @@ float estimate(trainer_action*t);
 //Trainers
 void start_running_trainer(trainer*t);
 int exec_trainer_action(trainer_action * ta);
+void block_trainer(trainer_action * ta);
 
 //Messages
-_Bool * is_required(char * pokemon);
+int is_required(char * pokemon);
 
+
+//Pokemons
+t_list * get_required_pokemons();
+//void pokemon_allocation(char * pokemon);
 
 
 //Main
@@ -52,17 +59,19 @@ int main(int argc, char **argv) {
 
 //Explicit definitions
 
-_Bool * is_required(char * pokemon){
+int is_required(char * pokemon){
 	int i = 0, j;
+	int pokemon_target = 0;
 	trainer* t = list_get(trainers, i);
+	char * aux_pokemon;
 
 	while(t != NULL){
 		j = 0;
-		char * aux_pokemon = list_get(t->targets, j);
+		aux_pokemon = list_get(t->targets, j);
 
 		while(aux_pokemon != NULL){
 			if(strcmp(pokemon, aux_pokemon) == 0){
-				return true;
+				pokemon_target++;
 			}
 			j++;
 			aux_pokemon = list_get(t->targets, j);
@@ -71,29 +80,93 @@ _Bool * is_required(char * pokemon){
 		i++;
 		t = list_get(trainers, i);
 	}
+
+	i=0;
+	aux_pokemon = list_get(allocated_pokemons, i);
+	while(i != NULL){
+		if(strcmp(pokemon, aux_pokemon) == 0){
+			pokemon_target--;
+		}
+		i++;
+		aux_pokemon = list_get(allocated_pokemons, i);
+
+	}
+	return (pokemon_target > 0);
+}
+
+int is_id_in_list(t_list * list, int value) {
+	int i;
+	for(i=0 ; i<list->elements_count ; i++) {
+		int * tid = list_get(list, i);
+		if(value == (*tid)) {
+			return true;
+		}
+	}
 	return false;
 }
 
+void block_trainer(trainer_action * ta){
+	ta->status = BLOCKED_ACTION;
+}
+/*
+void pokemon_allocation(char * pokemon){
+	pokemon_allocation * pa = malloc(sizeof(pokemon_allocation));
+	pa->status = BLOCKED_POKEMON;
+
+	list_add(allocated_pokemons, pa);
+}
+*/
+
 int process_pokemon_message(queue_message * message, int from_broker) {
+	//Aca estoy suscrito a las colas del broker, que me va a ir pasando mensajes
+	//No voy a manejar todos los tipos de mensajes, solo los que debo como proceso
+
 	print_pokemon_message(message);
 	//Message Processing
 	switch(message->header->type) {
 		case NEW_POKEMON:;
 			new_pokemon_message * npm = message->payload;
-			if(is_required(npm->pokemon)){
-				list_add(required_pokemons, npm->pokemon);
-			}else{
-				//log_info("Sorry, this pokemon is not required\n");
-			}
 			break;
 		case APPEARED_POKEMON:;
+			//Broker me avisa que aparecio un nuevo pokemon
+
 			appeared_pokemon_message * apm = message->payload;
+
+			//Veo si me sirve el pokemon que aparecio
+			if(is_required(apm->pokemon)) {
+				list_add(required_pokemons, apm->pokemon);
+				//Agregado a la lista de pokemones requeridos
+				//En el momento que un entrenador se encuentre dormido o libre hay que planificarlo
+
+				//Cual es la diferencia entre appered pokemon message y catch pkemon create????
+				int pos_x, pos_y;
+				queue_message  * cmsg = catch_pokemon_create(apm->pokemon, pos_x, pos_y);
+
+
+				send_pokemon_message(CONFIG.broker_socket, cmsg, 1, -1);
+
+				int cid = cmsg->header->message_id;
+				list_add(catch_msgs_ids, &cid);
+
+				//block_trainer(trainer);
+			}else{
+				//Nada, el pokemon no me sirve y lo dejo libre
+			}
+
 			break;
 		case CATCH_POKEMON:;
 			catch_pokemon_message * chpm = message->payload;
 			break;
 		case CAUGHT_POKEMON:;
 			caught_pokemon_message * ctpm = message->payload;
+
+			int correlative = message->header->correlative_id;
+			if(is_id_in_list(catch_msgs_ids, correlative)) {
+				if(ctpm->result) {
+
+				}
+			}
+
 			break;
 		case GET_POKEMON:;
 			get_pokemon_message * gpm = message->payload;
@@ -103,6 +176,13 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 			break;
 	}
 	return 1;
+}
+
+t_list * get_required_pokemons(){
+	//Solo devuelve la lista??
+	//O le tengo que preguntar al broker por los pokemones disponibles en el mapa y etc?
+
+	return required_pokemons;
 }
 
 int broker_server_function() {
@@ -126,6 +206,20 @@ int broker_server_function() {
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_LOCALIZED_POKEMON);
 	log_info(LOGGER, "Subscribing to Queue CAUGHT_POKEMON");
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CAUGHT_POKEMON);
+
+	int countr_aux;
+	required_pokemons = list_create();
+	required_pokemons = get_required_pokemons();
+	//Ojo que en la definicion de la funcion no me cierra para nada el "orden cronologico"
+
+	for(countr_aux=0 ; required_pokemons->elements_count ; countr_aux++) {
+		char * pokemon_name = list_get(required_pokemons, countr_aux);
+
+		queue_message * msg = get_pokemon_create(pokemon_name);
+		send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+
+		msg->header->message_id;
+	}
 
 	log_info(LOGGER, "Awaiting message from Broker");
 	while(1) {
@@ -203,6 +297,8 @@ void setup(int argc, char **argv) {
 	CONFIG.broker_socket = create_socket();
 	connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port);
 
+	catch_msgs_ids = list_create();
+
 	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
 		return;
@@ -238,7 +334,6 @@ void setup(int argc, char **argv) {
 	blocked_queue = list_create();
 	exit_queue = list_create();
 
-	required_pokemons = list_create();
 	allocated_pokemons = list_create();
 
 	//CREAMOS LOS ENTRENADORES

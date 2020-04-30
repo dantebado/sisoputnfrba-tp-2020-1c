@@ -841,3 +841,17 @@ _message_queue_name queue_name_to_enum(char * name) {
 	}
 	return -1;
 }
+/*
+void custom_print(const char* message, ...){
+	fflush(stdin);
+	fflush(stdout);
+
+	va_list var;
+	va_start(var, message);
+	vprintf(message, var);
+	va_end(var);
+
+	fflush(stdin);
+	fflush(stdout);
+}
+*/

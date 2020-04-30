@@ -123,6 +123,8 @@ void setup(int argc, char **argv) {
 		CONFIG.seek_alg = BEST_FIT;
 	}
 
+	//custom_print("Dante gato %d", CONFIG.memory_size);
+
 	init_memory();
 
 	last_message_id = 0;
