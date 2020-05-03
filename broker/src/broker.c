@@ -100,7 +100,7 @@ void setup(int argc, char **argv) {
 	string_append(&cfg_path, ".cfg");
 	_CONFIG = config_create(cfg_path);
 
-	LOGGER = log_create(config_get_string_value(_CONFIG, "LOG_FILE"), (argc > 1) ? argv[1] : "broker", true, LOG_LEVEL_TRACE);
+	LOGGER = log_create(config_get_string_value(_CONFIG, "LOG_FILE"), (argc > 1) ? argv[1] : "broker", true, LOG_LEVEL_INFO);
 
 	CONFIG.memory_size = config_get_int_value(_CONFIG, "TAMANO_MEMORIA");
 	CONFIG.partition_min_size = config_get_int_value(_CONFIG, "TAMANO_MINIMO_PARTICION");
@@ -437,8 +437,6 @@ void free_memory_partition(memory_partition * partition) {
 	sem_post(memory_access_mutex);
 }
 memory_partition * write_payload_to_memory(int payload_size, void * payload) {
-	log_info(LOGGER, "Writing %d bytes", payload_size);
-
 	memory_partition * the_partition = get_available_partition_by_payload_size(payload_size);
 
 	if(the_partition == NULL) {
@@ -449,9 +447,6 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 		memcpy(the_partition->partition_start, payload, payload_size);
 
 		memory_free_space -= payload_size;
-
-		log_info(LOGGER, "Payload written in partition %d", the_partition->number);
-
 	}
 
 	return the_partition;
@@ -647,7 +642,7 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	final_message->message->payload = partition;
 	final_message->payload_address_copy = partition;
 
-	log_info(LOGGER, "Adding message %d to queue %s", message->header->message_id, enum_to_queue_name(queue_name));
+	log_info(LOGGER, "Adding message %d to queue %s with correlative %d", message->header->message_id, enum_to_queue_name(queue_name), message->header->correlative_id);
 	sem_wait(queue->mutex);
 	sem_wait(messages_index_mutex);
 	list_add(queue->messages, final_message);
@@ -661,10 +656,10 @@ void queue_thread_function(message_queue * queue) {
 	int i, j;
 	while(1) {
 		sem_wait(queue->mutex);
-		log_info(LOGGER, "Queue %d has %d messages and %d suscriptors",
+	/*	log_info(LOGGER, "Queue %d has %d messages and %d suscriptors",
 				queue->name,
 				queue->messages->elements_count,
-				queue->subscribers->elements_count);
+				queue->subscribers->elements_count);	*/
 		for(i=0 ; i<queue->messages->elements_count ; i++) {
 			broker_message * tmessage = list_get(queue->messages, i);
 

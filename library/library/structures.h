@@ -192,12 +192,10 @@ typedef struct {
  * */
 
 typedef struct {
-	int id;
-	int x;
-	int y;
-	t_list * pokemons;
-	t_list * targets;
-} trainer __attribute__((packed));
+	char * name;
+	int total_count;
+	int total_caught;
+} pokemon_requirement;
 
 typedef enum{
 	NEW_ACTION,
@@ -207,6 +205,18 @@ typedef enum{
 	EXIT_ACTION
 } trainer_action_status;
 
+typedef enum {
+	CAPTURING,
+	AWAITING_CAPTURE_RESULT,
+	TRADING
+} trainer_activity_type;
+
+typedef struct {
+	trainer_activity_type type;
+	int correlative_id_awaiting;
+	void * data;
+} trainer_activity ;
+
 typedef struct{
 	int quantum_counter;
 	int waiting_counter;
@@ -214,8 +224,23 @@ typedef struct{
 	float estimation;
 	float last_estimation;
 
+	pthread_t * thread;
+	sem_t * mutex;
+
 	trainer_action_status status;
+
+	trainer_activity * current_activity;
 } trainer_action;
+
+typedef struct {
+	int id;
+	int x;
+	int y;
+	t_list * pokemons;
+	t_list * targets;
+
+	trainer_action * stats;
+} trainer __attribute__((packed));
 
 typedef enum{
 	BLOCKED_POKEMON,

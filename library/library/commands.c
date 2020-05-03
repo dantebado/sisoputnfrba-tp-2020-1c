@@ -66,7 +66,7 @@ void _command_broker_catch_pokemon(queue_message * data, gameboy_config CONFIG) 
 }
 void _command_broker_caught_pokemon(queue_message * data, int message_id, gameboy_config CONFIG) {
 	int socket = _command_connect_to_broker(CONFIG);
-	send_pokemon_message_with_id(socket, data, 0, message_id, -1);
+	send_pokemon_message(socket, data, 1, message_id);
 
 	close_socket(socket);
 }

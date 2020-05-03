@@ -2,26 +2,29 @@
 
 //GLOBAL VARIABLES
 team_config CONFIG;
+
+int internal_broker_need;
+
 t_list * trainers;
 
-//QUEUES
-t_list * new_queue;
-t_list * ready_queue;
-t_list * exec_threads;
-t_list * blocked_queue;
-t_list * exit_queue;
+t_list * global_requirements;
 
-//RESOURCES
+sem_t * required_pokemons_mutex;
 t_list * required_pokemons;
-t_list * allocated_pokemons;
 
-t_list * catch_msgs_ids;
+sem_t * ready_queue_mutex;
+t_list * ready_queue;
 
-//EXECUTING TRAINERS
-trainer_action * executing_trainer;
+trainer * executing_trainer;
 
 //SEMAPHORES
-sem_t * ready_queue_mutex;
+sem_t * executing_mutex;
+sem_t * broker_mutex;
+sem_t * broker_exec_mutex;
+
+pthread_t * exec_thread;
+
+t_list * get_pokemon_msgs_ids;
 
 //PROTOTYPES
 //Connections
@@ -30,24 +33,25 @@ int broker_server_function();
 int server_function();
 
 //Queues
-void executing(trainer*t);
+void executing(trainer * t);
 void sort_queues();
 void sort_by_burst();
 float estimate(trainer_action*t);
+void exec_thread_function();
+
+pokemon_requirement * find_requirement_by_pokemon_name(char * name);
 
 //Trainers
-void start_running_trainer(trainer*t);
-int exec_trainer_action(trainer_action * ta);
 void block_trainer(trainer_action * ta);
-trainer * closest_trainer(int pos_x, int pos_y);
+trainer * closest_free_trainer(int pos_x, int pos_y);
 
 //Pokemons
 int is_required(char * pokemon);
-void set_required_pokemons(t_list * list);
-t_list * get_required_pokemons();
-//void pokemon_allocation(char * pokemon);
-int is_pokemon_in_list(t_list * list, char * pokemon);
+void set_required_pokemons();
 
+int is_id_in_list(t_list * list, int value);
+
+void print_current_requirements();
 
 //Main
 int main(int argc, char **argv) {
@@ -58,38 +62,6 @@ int main(int argc, char **argv) {
 
 
 //Explicit definitions
-
-int is_required(char * pokemon){
-	int i = 0, j;
-	int pokemon_target = 0;
-	trainer* t = list_get(trainers, i);
-	char * aux_pokemon;
-
-	if(!is_pokemon_in_list(required_pokemons, pokemon)){
-		return false;
-	}else{
-		aux_pokemon = list_get(required_pokemons, i);
-		while(aux_pokemon != NULL){
-			if(strcmp(pokemon, aux_pokemon) == 0){
-				pokemon_target++;
-			}
-			i++;
-			aux_pokemon = list_get(required_pokemons, i);
-		}
-		i=0;
-		aux_pokemon = list_get(allocated_pokemons, i);
-		while(aux_pokemon != NULL){
-			if(strcmp(pokemon, aux_pokemon) == 0){
-				pokemon_target--;
-			}
-			i++;
-			aux_pokemon = list_get(allocated_pokemons, i);
-		}
-	}
-
-	return (pokemon_target > 0);
-}
-
 int is_id_in_list(t_list * list, int value) {
 	int i;
 	for(i=0 ; i<list->elements_count ; i++) {
@@ -104,14 +76,7 @@ int is_id_in_list(t_list * list, int value) {
 void block_trainer(trainer_action * ta){
 	ta->status = BLOCKED_ACTION;
 }
-/*
-void pokemon_allocation(char * pokemon){
-	pokemon_allocation * pa = malloc(sizeof(pokemon_allocation));
-	pa->status = BLOCKED_POKEMON;
 
-	list_add(allocated_pokemons, pa);
-}
-*/
 int process_pokemon_message(queue_message * message, int from_broker) {
 	//Aca estoy suscrito a las colas del broker, que me va a ir pasando mensajes
 	//No voy a manejar todos los tipos de mensajes, solo los que debo como proceso
@@ -124,87 +89,132 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 			break;
 		case APPEARED_POKEMON:;
 			//Broker me avisa que aparecio un nuevo pokemon
+			{
+				appeared_pokemon_message * apm = message->payload;
 
-			appeared_pokemon_message * apm = message->payload;
-
-			//Veo si me sirve el pokemon que aparecio
-			if(is_required(apm->pokemon)) {
-				list_add(required_pokemons, apm->pokemon);
-				//Agregado a la lista de pokemones requeridos
-				//En el momento que un entrenador se encuentre dormido o libre hay que planificarlo
-
-				//Cual es la diferencia entre appered pokemon message y catch pkemon create????
-				int pos_x, pos_y;
-				queue_message  * cmsg = catch_pokemon_create(apm->pokemon, pos_x, pos_y);
-
-
-				send_pokemon_message(CONFIG.broker_socket, cmsg, 1, -1);
-
-				int cid = cmsg->header->message_id;
-				list_add(catch_msgs_ids, &cid);
-
-				//block_trainer(trainer);
-			}else{
-				//Nada, el pokemon no me sirve y lo dejo libre
+				//Veo si me sirve el pokemon que aparecio
+				if(is_required(apm->pokemon)) {
+					log_info(LOGGER, "Adding to required pokemons");
+					sem_wait(required_pokemons_mutex);
+					list_add(required_pokemons, apm);
+					sem_post(required_pokemons_mutex);
+					log_info(LOGGER, "\tAdded");
+					//Agregado a la lista de pokemones requeridos
+					//En el momento que un entrenador se encuentre dormido o libre hay que planificarlo
+				} else {
+					//Nada, el pokemon no me sirve y lo dejo libre
+				}
 			}
-
 			break;
 		case CATCH_POKEMON:;
 			catch_pokemon_message * chpm = message->payload;
 			break;
 		case CAUGHT_POKEMON:;
-			caught_pokemon_message * ctpm = message->payload;
+			{
+				caught_pokemon_message * ctpm = message->payload;
 
-			int correlative = message->header->correlative_id;
-			if(is_id_in_list(catch_msgs_ids, correlative)) {
-				if(ctpm->result) {
+				int i;
+				for(i=0 ; i<trainers->elements_count ; i++){
+					trainer * ttrainer = list_get(trainers, i);
 
+					if(ttrainer->stats->current_activity != NULL) {
+						if(ttrainer->stats->current_activity->correlative_id_awaiting == message->header->correlative_id) {
+							if(ttrainer->stats->current_activity->type == AWAITING_CAPTURE_RESULT) {
+
+								log_info(LOGGER, "Trainer %d was expecting this message", ttrainer->id);
+
+								if(ctpm->result) {
+									appeared_pokemon_message * tapm = ttrainer->stats->current_activity->data;
+									list_add(ttrainer->pokemons, tapm->pokemon);
+
+									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
+
+									treq->total_caught++;
+
+									log_info(LOGGER, "Capture registered successfully");
+									print_current_requirements();
+								}
+
+								ttrainer->stats->status = BLOCKED_ACTION;
+
+								free(ttrainer->stats->current_activity);
+								ttrainer->stats->current_activity = NULL;
+							}
+						}
+					}
 				}
 			}
-
 			break;
 		case GET_POKEMON:;
 			get_pokemon_message * gpm = message->payload;
 			break;
 		case LOCALIZED_POKEMON:;
 			localized_pokemon_message * lpm = message->payload;
+			{
+				int i, already_recieved = false;
+				for(i=0 ; i<required_pokemons->elements_count ; i++) {
+					appeared_pokemon_message * tapm = list_get(required_pokemons, i);
+					if(strcmp(tapm->pokemon, lpm->pokemon) == 0) {
+						already_recieved = true;
+					}
+				}
+				if(already_recieved == false) {
+					if(is_required(lpm->pokemon)) {
+						for(i=0 ; i<lpm->locations_counter ; i++) {
+							location * tlocation = list_get(lpm->locations, i);
+							sem_wait(required_pokemons_mutex);
+							list_add(required_pokemons, appeared_pokemon_create(lpm->pokemon, tlocation->x, tlocation->y));
+							sem_post(required_pokemons_mutex);
+						}
+					} else {
+					}
+				}
+			}
 			break;
 	}
 	return 1;
 }
 
-t_list * get_required_pokemons(){
-	//Solo devuelve la lista??
-	//O le tengo que preguntar al broker por los pokemones disponibles en el mapa y etc?
-
-	return required_pokemons;
-}
-
-int is_pokemon_in_list(t_list * list, char * pokemon){
-	int i=0;
-	char * aux_pokemon = list_get(list, i);
-
-	while(aux_pokemon != NULL){
-		if(strcmp(pokemon, aux_pokemon) == 0) return true;
-		i++;
-		aux_pokemon = list_get(list, i);
+pokemon_requirement * find_requirement_by_pokemon_name(char * name) {
+	int i;
+	for(i=0 ; i<global_requirements->elements_count ; i++) {
+		pokemon_requirement * treq = list_get(global_requirements, i);
+		if(strcmp(treq->name, name) == 0) {
+			return treq;
+		}
 	}
-
-	return false;
+	return NULL;
 }
 
-void set_required_pokemons(t_list * list){
+int is_required(char * pokemon) {
+	pokemon_requirement * req = find_requirement_by_pokemon_name(pokemon);
+	return req == false ? NULL : req->total_caught < req->total_count;
+}
+
+void set_required_pokemons(){
+	log_info(LOGGER, "Hay %d trainers", trainers->elements_count);
+
 	int i = 0, j;
-	trainer* t = list_get(trainers, i);
+	trainer * t = list_get(trainers, i);
 	char * aux_pokemon;
 
 	while(t != NULL){
+
 		j = 0;
 		aux_pokemon = list_get(t->targets, j);
 
 		while(aux_pokemon != NULL){
-			if(!is_pokemon_in_list(list, aux_pokemon)){
-				list_add(list, aux_pokemon);
+			pokemon_requirement * trequirement = find_requirement_by_pokemon_name(aux_pokemon);
+
+			if(trequirement == NULL){
+				trequirement = malloc(sizeof(pokemon_requirement));
+				trequirement->name = aux_pokemon;
+				trequirement->total_caught = 0;
+				trequirement->total_count = 1;
+
+				list_add(global_requirements, trequirement);
+			} else {
+				trequirement->total_count++;
 			}
 			j++;
 			aux_pokemon = list_get(t->targets, j);
@@ -213,11 +223,10 @@ void set_required_pokemons(t_list * list){
 		i++;
 		t = list_get(trainers, i);
 	}
-
 }
 
 int broker_server_function() {
-	int success_listening = failed;
+	int success_listening = failed, i;
 	do {
 		log_info(LOGGER, "Atempting to connect to broker");
 		if((CONFIG.broker_socket = create_socket()) == failed) {
@@ -238,29 +247,32 @@ int broker_server_function() {
 	log_info(LOGGER, "Subscribing to Queue CAUGHT_POKEMON");
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CAUGHT_POKEMON);
 
-	int countr_aux;
-	required_pokemons = list_create();
-	set_required_pokemons(required_pokemons);
-	//Ojo que en la definicion de la funcion no me cierra para nada el "orden cronologico"
+	for(i=0 ; i<global_requirements->elements_count ; i++) {
+		pokemon_requirement * treq = list_get(global_requirements, i);
+		queue_message * msg = get_pokemon_create(treq->name);
 
-	for(countr_aux=0 ; required_pokemons->elements_count ; countr_aux++) {
-		char * pokemon_name = list_get(required_pokemons, countr_aux);
-
-		queue_message * msg = get_pokemon_create(pokemon_name);
 		send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
 
-		msg->header->message_id;
+		int * tid = malloc(sizeof(int));
+		memcpy(tid, &msg->header->message_id, sizeof(int));
+
+		list_add(get_pokemon_msgs_ids, tid);
 	}
 
 	log_info(LOGGER, "Awaiting message from Broker");
 	while(1) {
 		net_message_header * header = malloc(sizeof(net_message_header));
-		read(CONFIG.broker_socket, header, sizeof(net_message_header));
 
-		queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
-		send_message_acknowledge(message, CONFIG.broker_socket);
+		sem_wait(broker_mutex);
+		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
+		if(!internal_broker_need) {
+			read(CONFIG.broker_socket, header, sizeof(net_message_header));
+			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
+			send_message_acknowledge(message, CONFIG.broker_socket);
 
-		process_pokemon_message(message, 1);
+			process_pokemon_message(message, 1);
+		}
+		sem_post(broker_mutex);
 	}
 
 	return 0;
@@ -287,53 +299,40 @@ int server_function() {
 	return 0;
 }
 
-trainer * closest_trainer(int pos_x, int pos_y){
-	int i = 0;
-	trainer * a_trainer = list_get(trainers, i);
-	trainer * another_trainer = (trainers, i+1);
-	trainer * the_closest;
-
-	int is_closer_to(int x, int y, trainer * trainer_1, trainer * trainer_2){
-		int positions_for_trainer_1 = fabs(trainer_1->x - x) + fabs(trainer_1->y - y);
-		int positions_for_trainer_2 = fabs(trainer_2->x - x) + fabs(trainer_2->y - y);
-
-		return (positions_for_trainer_1 < positions_for_trainer_2);
-	}
-
-	while(a_trainer != NULL || another_trainer != NULL){
-		if(is_closer_to(pos_x, pos_y, a_trainer, another_trainer)){
-			(*the_closest) = (*a_trainer);
-		}
-
-		i++;
-		a_trainer = list_get(trainers, i);
-		another_trainer = list_get(trainers, i+1);
-	}
-
-	return the_closest;
+int calculate_distance_to(trainer * t, int x, int y) {
+	return fabs(t->x - x) + fabs(t->y - y);
 }
 
-void start_running_trainer(trainer*t){
-	pthread_t * thread_exec;
+int is_free(trainer * t) {
+	return t->stats->current_activity == NULL;
+}
 
-	pthread_create(&thread_exec, NULL, executing, t);
-	list_add(exec_threads, &thread_exec);
+trainer * closest_free_trainer(int pos_x, int pos_y){
+	int closest_distance = -1;
+	trainer * closest_trainer = NULL;
+	int i = 0;
 
-	trainer_action * ta;
-	ta->quantum_counter = 0;
-	ta->waiting_counter = 0;
-	ta->estimation = CONFIG.initial_estimate;
-	ta->last_estimation = 0;
-	ta->status = NEW_ACTION;
+	for(i=0 ; i<trainers->elements_count ; i++) {
+		trainer * ttrainer = list_get(trainers, i);
 
-	list_add(new_queue, ta);
-	log_info(LOGGER, "New trainer! ID: %d", t->id);
+		if(is_free(ttrainer)) {
+			int tdistance = calculate_distance_to(ttrainer, pos_x, pos_y);
+			if(closest_trainer == NULL) {
+				closest_distance = tdistance;
+				closest_trainer = ttrainer;
+			} else {
+				if(closest_distance > 1) {
+					closest_distance = tdistance;
+					closest_trainer = ttrainer;
+				}
+			}
+		}
+	}
 
-	pthread_join(thread_exec, NULL);
+	return closest_trainer;
 }
 
 void setup(int argc, char **argv) {
-
 	//HACEMOS SETUP DEL CONFIG
 	char * cfg_path = string_new();
 	string_append(&cfg_path, (argc > 1) ? argv[1] : "team");
@@ -359,11 +358,23 @@ void setup(int argc, char **argv) {
 	CONFIG.team_port = config_get_int_value(_CONFIG, "PUERTO_TEAM");
 	CONFIG.initial_estimate = config_get_int_value(_CONFIG, "ESTIMACION_INICIAL");
 
-	//CREAMOS SOCKET DE ESCUCHA CON EL BROKER
-	CONFIG.broker_socket = create_socket();
-	connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port);
+	internal_broker_need = false;
 
-	catch_msgs_ids = list_create();
+	get_pokemon_msgs_ids = list_create();
+	required_pokemons = list_create();
+
+	ready_queue = list_create();
+	global_requirements = list_create();
+	executing_trainer = NULL;
+
+	required_pokemons_mutex = malloc(sizeof(sem_t));
+	sem_init(required_pokemons_mutex, 0, 1);
+
+	broker_mutex = malloc(sizeof(sem_t));
+	sem_init(broker_mutex, 0, 1);
+
+	broker_exec_mutex = malloc(sizeof(sem_t));
+	sem_init(broker_exec_mutex, 0, 1);
 
 	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
@@ -376,10 +387,6 @@ void setup(int argc, char **argv) {
 		return;
 	}
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
-	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, CONFIG.broker_socket);
-
-	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);
 
 
 	//HACEMOS CONFIG DE LOS ENTRENADORES
@@ -395,18 +402,14 @@ void setup(int argc, char **argv) {
 
 	//CREAMOS LAS LISTAS PARA LOS ENTRENADORES
 	trainers = list_create();
-	new_queue = list_create();
-	ready_queue = list_create();
-	blocked_queue = list_create();
-	exit_queue = list_create();
 
-	allocated_pokemons = list_create();
+	log_info(LOGGER, "Creating pokemons");
 
 	//CREAMOS LOS ENTRENADORES
 	if(trainers_count > 0) {
 		int i;
 		for(aux_counter=0 ; aux_counter<trainers_count ; aux_counter++) {
-			trainer t;
+			trainer * t = malloc(sizeof(trainer));
 
 			char * this_positions = string_split(positions+1, "]")[aux_counter];
 			char * original_positions = this_positions;
@@ -415,8 +418,8 @@ void setup(int argc, char **argv) {
 			while(this_positions[0] == ' ') {
 				this_positions++;
 			}
-			t.x = atoi(string_get_string_as_array(this_positions)[0]);
-			t.y = atoi(string_get_string_as_array(this_positions)[1]);
+			t->x = atoi(string_get_string_as_array(this_positions)[0]);
+			t->y = atoi(string_get_string_as_array(this_positions)[1]);
 			free(original_positions);
 
 			char * this_pokemons = string_split(pokemons+1, "]")[aux_counter];
@@ -431,9 +434,9 @@ void setup(int argc, char **argv) {
 				if(this_pokemons[i] == ',') count_pokemons++;
 			}
 			if(strlen(this_pokemons) == 2) count_pokemons--;
-			t.pokemons = list_create();
+			t->pokemons = list_create();
 			for(i=0 ; i<count_pokemons ; i++){
-				list_add(t.pokemons, string_get_string_as_array(this_pokemons)[i]);
+				list_add(t->pokemons, string_get_string_as_array(this_pokemons)[i]);
 			}
 
 			char * this_targets = string_split(targets+1, "]")[aux_counter];
@@ -448,16 +451,33 @@ void setup(int argc, char **argv) {
 				if(this_targets[i] == ',') count_targets++;
 			}
 			if(strlen(this_targets) == 2) count_targets--;
-			t.targets = list_create();
+			t->targets = list_create();
 			for(i=0 ; i<count_targets ; i++){
-				list_add(t.targets, string_get_string_as_array(this_targets)[i]);
+				list_add(t->targets, string_get_string_as_array(this_targets)[i]);
 			}
 
-			//CREAMOS EL HILO DE EJECUCION DEL ENTRENADOR
-			t.id = aux_counter;
-			start_running_trainer(&t);
+			t->stats = malloc(sizeof(trainer_action));
+			t->stats->estimation = CONFIG.initial_estimate;
+			t->stats->last_estimation = 0;
+			t->stats->quantum_counter = 0;
+			t->stats->status = NEW_ACTION;
+			t->stats->waiting_counter = 0;
 
-			/*printf("ENTRENADOR %d", aux_counter);
+			//CREAMOS EL HILO DE EJECUCION DEL ENTRENADOR
+			t->id = aux_counter;
+
+			t->stats->current_activity = NULL;
+
+			t->stats->mutex = malloc(sizeof(sem_t));
+			sem_init(t->stats->mutex, 0, 0);
+
+			pthread_t * thread_exec = malloc(sizeof(pthread_t));
+			pthread_create(thread_exec, NULL, executing, t);
+			t->stats->thread = thread_exec;
+
+			list_add(trainers, t);
+
+	/*		printf("ENTRENADOR %d", aux_counter);
 			printf("\n\tX = %d", t.x);
 			printf("\n\tY = %d", t.y);
 			printf("\n\tPOKEMONS = %d ( ", t.pokemons->elements_count);
@@ -469,14 +489,44 @@ void setup(int argc, char **argv) {
 			for(i=0 ; i<count_targets ; i++) {
 				printf("%s ", list_get(t.targets, i));
 			}
-			printf(")\n\n");*/
+			printf(")\n\n");	*/
 		}
 	}
 
+	executing_mutex = malloc(sizeof(sem_t));
+	sem_init(executing_mutex, 0, 1);
+
+	ready_queue_mutex = malloc(sizeof(sem_t));
+	sem_init(ready_queue_mutex, 0, 1);
+
+	set_required_pokemons();
+	print_current_requirements();
+
+	//CREAMOS SOCKET DE ESCUCHA CON EL BROKER
+	CONFIG.broker_socket = create_socket();
+	connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port);
+	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, CONFIG.broker_socket);
+
+	exec_thread = malloc(sizeof(pthread_t));
+	pthread_create(exec_thread, NULL, exec_thread_function, NULL);
+	pthread_join(exec_thread, NULL);
+
+	pthread_join(CONFIG.server_thread, NULL);
+	pthread_join(CONFIG.broker_thread, NULL);
+}
+
+void print_current_requirements() {
+	int i;
+	log_info(LOGGER, "GLOBAL REQUIREMENTS");
+	for(i=0 ; i<global_requirements->elements_count ; i++) {
+		pokemon_requirement * req = list_get(global_requirements, i);
+		log_info(LOGGER, "\tRequirement %s - Total %d - Caught %d - Left %d", req->name,
+					req->total_count, req->total_caught, req->total_count - req->total_caught);
+	}
 }
 
 float estimate(trainer_action*t){
-	int alpha = CONFIG.initial_estimate;
+	int alpha = 50;
 
 	//FORMULA DE LA ESTIMACION??
 	float estimation = (alpha/100)*(t->quantum_counter) + (1-(alpha/100))*(t->last_estimation);
@@ -499,28 +549,8 @@ void sort_by_burst(){
 }
 
 void sort_queues(){
-
-	//OJO ACA
-	//Hay entrenadores haciendo nada?
-	for(int i=0; i<blocked_queue->elements_count; i++){
-		trainer_action * ta = list_get(blocked_queue, i);
-		ta->status = READY_ACTION;
-		for(int j=0; j < allocated_pokemons->elements_count; j++){ //Esta queriendo agarrar un pokemon?
-			//Guarda la memoria aca con los punteros
-
-			pokemon_allocation * pa = list_get(allocated_pokemons, j);
-			if(pa->status == WAITING_POKEMON){
-				ta->status = BLOCKED_ACTION;
-			}
-		}
-		if(ta->status == READY_ACTION){
-			ta->estimation = estimate(ta);
-			ta->last_estimation = ta->estimation;
-			list_add(ready_queue, list_remove(blocked_queue, i));
-		}
-	}
-
 	//Hay que cambiar los algoritmos de planificacion en tiempo real
+	sem_wait(ready_queue_mutex);
 	switch(CONFIG.planning_alg){
 		case FIFO_PLANNING: //Queda igual
 			break;
@@ -538,83 +568,166 @@ void sort_queues(){
 			break; //Queda igual porque planifica FIFO, despues controlamos el quantum
 	}
 
+	log_info(LOGGER, "Sorted queues");
+
 	//Hay que correr el primero en la cola de ready
 	if(!list_is_empty(ready_queue) && executing_trainer == NULL){
 		executing_trainer = list_remove(ready_queue, 0);
-		executing_trainer->status = EXEC_ACTION;
+		executing_trainer->stats->status = EXEC_ACTION;
+
+		log_info(LOGGER, "Now executing trainer %d", executing_trainer->id);
 	}
+	sem_post(ready_queue_mutex);
 }
 
-int exec_trainer_action(trainer_action * ta){
-	return 0;
+int is_trainer_completed(trainer * t) {
+	//TODO computar los requiremientos de cada trainer, pero no sabemos si debe tener en cuenta los que tiene al comienzo
+	return false;
 }
 
-void executing(trainer*t){
+int is_globally_completed() {
+	int i;
+	for(i=0 ; i<trainers->elements_count ; i++) {
+		trainer * ttrainer = list_get(trainers, i);
+		if(!is_trainer_completed(ttrainer)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+int location_are_the_same(location * l1, location * l2) {
+	return (l1->x == l2->x && l1->y == l2->y);
+}
+
+void executing(trainer * t){
 	//Es el entrenador ejecutando acciones
-
-	trainer_action * this_trainer_action = NULL;
-
-	sem_init(&ready_queue_mutex, 0, 1);
+	log_info(LOGGER, "Init thread, trainer %d", t->id);
 
 	while(1){
-		//Si no tiene nada que hacer (momentaneamente)
-		if(this_trainer_action == NULL){
-			//Guarda los semaforos
-			sem_wait(&ready_queue_mutex);
-			{
-				if(ready_queue->elements_count != 0){
-					this_trainer_action = list_get(ready_queue, 0);
-					list_remove(ready_queue, 0);
-				}
-			}
-			sem_post(&ready_queue_mutex);
-		}else{
-			//Tiene algo que hacer, ejecuta
-			this_trainer_action->status = EXEC_ACTION;
-			log_info(LOGGER, "RUNNING TRAINER %d\n", t->id);
+		sem_wait(t->stats->mutex);
 
-			if(exec_trainer_action(this_trainer_action)){
-				this_trainer_action->quantum_counter++;
+		log_info(LOGGER, "Trainer %d executing", t->id);
 
-				if(list_is_empty(t->targets)){ //GUARDA QUE NO ME GUSTA EL CAMBIO DE LISTAS
-					//Salida del entrenador por fin de acciones que debe realizar
-					this_trainer_action->status = EXIT_ACTION;
-					list_add(exit_queue, executing_trainer);
-					log_info(LOGGER, "TRAINER %d HAS FINISHED\n", t->id);
+		int quantum_ended = false;
 
-					list_remove(exec_threads, t->id);
-					this_trainer_action = NULL;
-				}else{
-					if(this_trainer_action->quantum_counter == CONFIG.quantum){
-						//Salida del entrenador por fin de quantum
-						sem_wait(&ready_queue_mutex);
-						{
-							this_trainer_action->status = READY_ACTION;
-							list_add(ready_queue, this_trainer_action);
-						}
-						sem_post(&ready_queue_mutex);
-
-						this_trainer_action->quantum_counter = 0;
-						log_info(LOGGER, "QUANTUM FINISHED FOR TRAINER %d\n", t->id);
-						this_trainer_action = NULL;
-					}else{
-						//Nada, el entrenador continua
-					}
-				}
-			}else{
-				//Hubo error
-				this_trainer_action->status = EXIT_ACTION;
-				list_add(exit_queue, this_trainer_action);
-				log_info(LOGGER, "ACTION COULD NOT BE RESOLVED FOR TRAINER %d\n", t->id);
-				this_trainer_action = NULL;
+		t->stats->quantum_counter++;
+		if(CONFIG.planning_alg == RR) {
+			if(CONFIG.quantum == t->stats->quantum_counter) {
+				quantum_ended = true;
 			}
 		}
-		usleep(CONFIG.cpu_delay * 1000);
+
+		switch(t->stats->current_activity->type) {
+			case CAPTURING:
+				{
+					appeared_pokemon_message * apm = t->stats->current_activity->data;
+
+					log_info(LOGGER, "\tIs capturing pokemon %s at %d %d",
+							apm->pokemon, apm->x, apm->y);
+
+					if(location_are_the_same(location_create(apm->x, apm->y), location_create(t->x, t->y))) {
+
+						queue_message * msg = catch_pokemon_create(apm->pokemon, apm->x, apm->y);
+
+						internal_broker_need = true;
+							log_info(LOGGER, "\tIs already there, sending catch msg");
+							send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+						internal_broker_need = false;
+
+						t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
+
+						log_info(LOGGER, "\t\tCatch msg sent with ID %d", t->stats->current_activity->correlative_id_awaiting);
+						t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
+
+						t->stats->status = BLOCKED_ACTION;
+						executing_trainer = NULL;
+					} else {
+						log_info(LOGGER, "\tIs moving");
+						if(t->x != apm->x) {
+							if(t->x < apm->x) {
+								t->x++;
+							} else {
+								t->x--;
+							}
+						} else {
+							if(t->y < apm->y) {
+								t->y++;
+							} else {
+								t->y--;
+							}
+						}
+						log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
+					}
+				}
+				break;
+			case AWAITING_CAPTURE_RESULT:
+				break;
+			case TRADING:
+				//TODO: training
+				break;
+		}
+
+		if(quantum_ended && executing_trainer != NULL) {
+			executing_trainer = NULL;
+			list_add(ready_queue, t);
+		}
+		if(quantum_ended) {
+			t->stats->quantum_counter = 0;
+		}
+
+		sem_post(executing_mutex);
 	}
 }
 
+trainer * find_free_trainer() {
+	int i;
+	for(i=0 ; i<trainers->elements_count ; i++) {
+		trainer * t = list_get(trainers, i);
+		if(is_free(t)) {
+			return t;
+		}
+	}
+	return NULL;
+}
 
+void compute_pending_actions() {
+	sem_wait(required_pokemons_mutex);
+	while(required_pokemons->elements_count > 0) {
+		appeared_pokemon_message * apm = list_get(required_pokemons, 0);
+		trainer * free_trainer = closest_free_trainer(apm->x, apm->y);
 
+		if(free_trainer != NULL) {
+			trainer_activity * activity = malloc(sizeof(trainer_activity));
+			activity->type = CAPTURING;
+			activity->data = apm;
+			activity->correlative_id_awaiting = -1;
+			free_trainer->stats->current_activity = activity;
+			free_trainer->stats->status = READY_ACTION;
+			list_add(ready_queue, free_trainer);
+		}
+
+		list_remove(required_pokemons, 0);
+	}
+	sem_post(required_pokemons_mutex);
+}
+
+void exec_thread_function() {
+	while(!is_globally_completed()) {
+		log_info(LOGGER, "Planning");
+
+		compute_pending_actions();
+		sort_queues();
+
+		usleep(CONFIG.cpu_delay * 1000 * 1000);
+		if(executing_trainer != NULL) {
+			sem_wait(executing_mutex);
+			sem_post(executing_trainer->stats->mutex);
+		} else {
+			//OVERHEARD
+		}
+	}
+}
 
 
 
