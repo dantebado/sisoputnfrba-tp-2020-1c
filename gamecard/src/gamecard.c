@@ -107,6 +107,7 @@ void setup_tall_grass() {
 	tall_grass->magic_number = config_get_string_value(_TG_CONFIG, "MAGIC_NUMBER");
 
 	tall_grass->blocks_in_bytes = tall_grass->blocks / 8; //TODO Que pasa si no son multiplos de ocho
+	tall_grass->total_bytes = tall_grass->block_size * tall_grass->blocks;
 
 	log_info(LOGGER, "Initing TallGrass with %d blocks of %d bytes and %s magic number",
 			tall_grass->blocks, tall_grass->block_size, tall_grass->magic_number);
@@ -119,12 +120,15 @@ void setup_tall_grass() {
 		bitmap_file = fopen(_tall_grass_bitmap_path, "w");
 		fclose(bitmap_file);
 
-		void * bitmap_data = malloc();
+		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
 		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks_in_bytes, LSB_FIRST);
 		int i;
 		for(i=0 ; i<tall_grass->blocks ; i++) {
 			bitarray_clean_bit(tall_grass->bitmap, i);
 		}
+
+		tall_grass->free_bytes = tall_grass->block_size * tall_grass->blocks;
+
 		save_bitmap();
 	} else {
 		log_info(LOGGER, "Loading Bitmap");
@@ -133,8 +137,18 @@ void setup_tall_grass() {
 		fread(bitmap_data, tall_grass->blocks / 8, 1, bitmap_file);
 		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
 
+		int d, free = 0;
+		for(d=0 ; d<tall_grass->blocks ; d++) {
+			if(!bitarray_test_bit(tall_grass->bitmap, d)) {
+				free++;
+			}
+		}
+		tall_grass->free_bytes = tall_grass->block_size * free;
+
 		fclose(bitmap_file);
 	}
+
+	log_info(LOGGER, "%d total bytes, %d free", tall_grass->total_bytes, tall_grass->free_bytes);
 }
 
 int broker_server_function() {
