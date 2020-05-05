@@ -79,7 +79,7 @@ void setup(int argc, char **argv) {
 
 	setup_tall_grass();
 
-	/*if((CONFIG.internal_socket = create_socket()) == failed) {
+	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
 		return;
 	}
@@ -91,91 +91,7 @@ void setup(int argc, char **argv) {
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);*/
-}
-
-void save_bitmap() {
-	char * _tall_grass_bitmap_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
-	string_append(&_tall_grass_bitmap_path, "/Metadata/Bitmap.bin");
-	FILE * bitmap_file = fopen(_tall_grass_bitmap_path, "w");
-
-	fwrite(tall_grass->bitmap->bitarray, tall_grass->blocks / 8, 1, bitmap_file);
-
-	fclose(bitmap_file);
-	free(_tall_grass_bitmap_path);
-}
-
-void debug_bitmap() {
-	int i;
-	for(i=0 ; i<tall_grass->blocks ; i++) {
-		log_info(LOGGER, "Block %d %d", i, bitarray_test_bit(tall_grass->bitmap, i));
-	}
-}
-
-void setup_tall_grass() {
-	log_info(LOGGER, "Starting TallGrass");
-
-	char * _tall_grass_metadata_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
-	string_append(&_tall_grass_metadata_path, "/Metadata/Metadata.bin");
-
-	t_config * _TG_CONFIG = config_create(_tall_grass_metadata_path);
-
-	tall_grass = malloc(sizeof(tall_grass_fs));
-
-	tall_grass->block_size = config_get_int_value(_TG_CONFIG, "BLOCK_SIZE");
-	tall_grass->blocks = config_get_int_value(_TG_CONFIG, "BLOCKS");
-	tall_grass->magic_number = config_get_string_value(_TG_CONFIG, "MAGIC_NUMBER");
-
-	tall_grass->blocks_in_bytes = tall_grass->blocks / 8; //TODO Que pasa si no son multiplos de ocho
-	tall_grass->total_bytes = tall_grass->block_size * tall_grass->blocks;
-
-	log_info(LOGGER, "Initing TallGrass with %d blocks of %d bytes and %s magic number",
-			tall_grass->blocks, tall_grass->block_size, tall_grass->magic_number);
-
-	char * _tall_grass_bitmap_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
-	string_append(&_tall_grass_bitmap_path, "/Metadata/Bitmap.bin");
-	FILE * bitmap_file = fopen(_tall_grass_bitmap_path, "r");
-	if(bitmap_file == NULL) {
-		log_info(LOGGER, "There was no Bitmap file, creating");
-		bitmap_file = fopen(_tall_grass_bitmap_path, "w");
-		fclose(bitmap_file);
-
-		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
-		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks_in_bytes, LSB_FIRST);
-		int i;
-		for(i=0 ; i<tall_grass->blocks ; i++) {
-			bitarray_clean_bit(tall_grass->bitmap, i);
-		}
-
-		tall_grass->free_bytes = tall_grass->block_size * tall_grass->blocks;
-
-		save_bitmap();
-	} else {
-		log_info(LOGGER, "Loading Bitmap");
-
-		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
-		fread(bitmap_data, tall_grass->blocks / 8, 1, bitmap_file);
-		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
-
-		int d, free = 0;
-		for(d=0 ; d<tall_grass->blocks ; d++) {
-			if(!bitarray_test_bit(tall_grass->bitmap, d)) {
-				free++;
-			}
-		}
-		tall_grass->free_bytes = tall_grass->block_size * free;
-
-		fclose(bitmap_file);
-	}
-
-	log_info(LOGGER, "%d total bytes, %d free", tall_grass->total_bytes, tall_grass->free_bytes);
-	debug_bitmap();
-
-
-	//TEST
-
-	//tall_grass_save_file("/home", "test1", "hol", 3);
-	log_info(LOGGER, "%s", tall_grass_read_file("/home", "test1"));
+	pthread_join(CONFIG.broker_thread, NULL);
 }
 
 int broker_server_function() {
@@ -237,6 +153,84 @@ int server_function() {
 
 //TALLGRASS
 
+
+void setup_tall_grass() {
+	log_info(LOGGER, "Starting TallGrass");
+
+	char * _tall_grass_metadata_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+	string_append(&_tall_grass_metadata_path, "/Metadata/Metadata.bin");
+
+	t_config * _TG_CONFIG = config_create(_tall_grass_metadata_path);
+
+	tall_grass = malloc(sizeof(tall_grass_fs));
+
+	tall_grass->block_size = config_get_int_value(_TG_CONFIG, "BLOCK_SIZE");
+	tall_grass->blocks = config_get_int_value(_TG_CONFIG, "BLOCKS");
+	tall_grass->magic_number = config_get_string_value(_TG_CONFIG, "MAGIC_NUMBER");
+
+	tall_grass->blocks_in_bytes = tall_grass->blocks / 8; //TODO Que pasa si no son multiplos de ocho
+	tall_grass->total_bytes = tall_grass->block_size * tall_grass->blocks;
+
+	log_info(LOGGER, "Initing TallGrass with %d blocks of %d bytes and %s magic number",
+			tall_grass->blocks, tall_grass->block_size, tall_grass->magic_number);
+
+	char * _tall_grass_bitmap_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+	string_append(&_tall_grass_bitmap_path, "/Metadata/Bitmap.bin");
+	FILE * bitmap_file = fopen(_tall_grass_bitmap_path, "r");
+	if(bitmap_file == NULL) {
+		log_info(LOGGER, "There was no Bitmap file, creating");
+		bitmap_file = fopen(_tall_grass_bitmap_path, "w");
+		fclose(bitmap_file);
+
+		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
+		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks_in_bytes, LSB_FIRST);
+		int i;
+		for(i=0 ; i<tall_grass->blocks ; i++) {
+			bitarray_clean_bit(tall_grass->bitmap, i);
+		}
+
+		tall_grass->free_bytes = tall_grass->block_size * tall_grass->blocks;
+
+		save_bitmap();
+	} else {
+		log_info(LOGGER, "Loading Bitmap");
+
+		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
+		fread(bitmap_data, tall_grass->blocks / 8, 1, bitmap_file);
+		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
+
+		int d, free = 0;
+		for(d=0 ; d<tall_grass->blocks ; d++) {
+			if(!bitarray_test_bit(tall_grass->bitmap, d)) {
+				free++;
+			}
+		}
+		tall_grass->free_bytes = tall_grass->block_size * free;
+
+		fclose(bitmap_file);
+	}
+
+	log_info(LOGGER, "%d total bytes, %d free", tall_grass->total_bytes, tall_grass->free_bytes);
+	debug_bitmap();
+}
+
+void save_bitmap() {
+	char * _tall_grass_bitmap_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+	string_append(&_tall_grass_bitmap_path, "/Metadata/Bitmap.bin");
+	FILE * bitmap_file = fopen(_tall_grass_bitmap_path, "w");
+
+	fwrite(tall_grass->bitmap->bitarray, tall_grass->blocks / 8, 1, bitmap_file);
+
+	fclose(bitmap_file);
+	free(_tall_grass_bitmap_path);
+}
+
+void debug_bitmap() {
+	int i;
+	for(i=0 ; i<tall_grass->blocks ; i++) {
+		log_info(LOGGER, "Block %d %d", i, bitarray_test_bit(tall_grass->bitmap, i));
+	}
+}
 
 char * tall_grass_get_or_create_directory(char * path) {
 	char * directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
@@ -446,6 +440,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 			payload_size / (float)tall_grass->block_size);
 	if(necessary_blocks == 0) necessary_blocks++;
 
+	int new_occupied_blocks = necessary_blocks;
+
 	t_list * blocks = NULL;
 
 	char * file_metadata_path = string_duplicate(directory_path);
@@ -486,6 +482,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		int existing_blocks = aux_round_up(config_get_int_value(existing_config, "SIZE") / tall_grass->block_size,
 				config_get_int_value(existing_config, "SIZE") / (float)tall_grass->block_size);
 		int blocks_left = necessary_blocks - existing_blocks;
+
+		new_occupied_blocks -= existing_blocks;
 
 		blocks = list_create();
 
@@ -569,6 +567,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	fprintf(file_metadata_file, "%s", metadata_content);
 	fclose(file_metadata_file);
+
+	tall_grass->free_bytes = new_occupied_blocks * tall_grass->block_size;
 
 	try_open_file(path, filename);
 
