@@ -176,6 +176,8 @@ typedef struct {
 	int blocks;
 	char * magic_number;
 
+	int blocks_in_bytes;
+
 	t_bitarray * bitmap;
 } tall_grass_fs;
 

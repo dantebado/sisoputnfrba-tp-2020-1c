@@ -106,6 +106,8 @@ void setup_tall_grass() {
 	tall_grass->blocks = config_get_int_value(_TG_CONFIG, "BLOCKS");
 	tall_grass->magic_number = config_get_string_value(_TG_CONFIG, "MAGIC_NUMBER");
 
+	tall_grass->blocks_in_bytes = tall_grass->blocks / 8; //TODO Que pasa si no son multiplos de ocho
+
 	log_info(LOGGER, "Initing TallGrass with %d blocks of %d bytes and %s magic number",
 			tall_grass->blocks, tall_grass->block_size, tall_grass->magic_number);
 
@@ -117,8 +119,8 @@ void setup_tall_grass() {
 		bitmap_file = fopen(_tall_grass_bitmap_path, "w");
 		fclose(bitmap_file);
 
-		void * bitmap_data = malloc(tall_grass->blocks / 8); //TODO Que pasa si no son multiplos de ocho
-		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
+		void * bitmap_data = malloc();
+		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks_in_bytes, LSB_FIRST);
 		int i;
 		for(i=0 ; i<tall_grass->blocks ; i++) {
 			bitarray_clean_bit(tall_grass->bitmap, i);
@@ -127,7 +129,7 @@ void setup_tall_grass() {
 	} else {
 		log_info(LOGGER, "Loading Bitmap");
 
-		void * bitmap_data = malloc(tall_grass->blocks / 8); //TODO Que pasa si no son multiplos de ocho
+		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
 		fread(bitmap_data, tall_grass->blocks / 8, 1, bitmap_file);
 		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
 
