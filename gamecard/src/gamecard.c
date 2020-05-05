@@ -6,14 +6,19 @@ gamecard_config CONFIG;
 tall_grass_fs * tall_grass;
 
 //PROTOTYPES
+int process_pokemon_message(queue_message * message, int from_broker);
 void setup(int argc, char **argv);
-void save_bitmap();
-void setup_tall_grass();
 int broker_server_function();
 int server_function();
 
+void save_bitmap();
+void debug_bitmap();
+void setup_tall_grass();
 char * tall_grass_get_or_create_directory(char * path);
+t_list * find_free_blocks(int count);
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
+
+char * int_to_string(int number);
 
 int main(int argc, char **argv) {
 	setup(argc, argv);
@@ -96,6 +101,13 @@ void save_bitmap() {
 	free(_tall_grass_bitmap_path);
 }
 
+void debug_bitmap() {
+	int i;
+	for(i=0 ; i<tall_grass->blocks ; i++) {
+		log_info(LOGGER, "Block %d %d", i, bitarray_test_bit(tall_grass->bitmap, i));
+	}
+}
+
 void setup_tall_grass() {
 	log_info(LOGGER, "Starting TallGrass");
 
@@ -153,11 +165,12 @@ void setup_tall_grass() {
 	}
 
 	log_info(LOGGER, "%d total bytes, %d free", tall_grass->total_bytes, tall_grass->free_bytes);
+	debug_bitmap();
 
 
 	//TEST
 
-	tall_grass_save_file("/home", "test", "hola", 5);
+	tall_grass_save_file("/home", "test", "hola!", 5);
 }
 
 char * tall_grass_get_or_create_directory(char * path) {
@@ -198,6 +211,8 @@ char * tall_grass_get_or_create_directory(char * path) {
 	}
 	free(is_directory);
 
+	log_info(LOGGER, "Loaded directory %s", path);
+
 	config_destroy(dconfig);
 	return NULL;
 }
@@ -222,6 +237,10 @@ t_list * find_free_blocks(int count) {
 	return li;
 }
 
+int aux_round_up(int int_value, float float_value) {
+	return float_value - int_value > 0 ? int_value + 1 : int_value;
+}
+
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size) {
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
@@ -230,13 +249,18 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		return false;
 	}
 
-	int necessary_blocks = ceil(payload_size / tall_grass->block_size);
+	int necessary_blocks = aux_round_up(payload_size / tall_grass->block_size,
+			payload_size / (float)tall_grass->block_size);
 	if(necessary_blocks == 0) necessary_blocks++;
 
 	t_list * blocks = NULL;
 
 	char * file_metadata_path = string_duplicate(directory_path);
-	string_append(&file_metadata_path, "/filename/");
+	string_append(&file_metadata_path, "/");
+	string_append(&file_metadata_path, filename);
+
+	char * file_metadata_directory = string_duplicate(file_metadata_path);
+
 	string_append(&file_metadata_path, "/Metadata.bin");
 
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
@@ -248,6 +272,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 			log_error(LOGGER, "Cannot find necessary free blocks (%d)", necessary_blocks);
 			return false;
 		}
+
+		mkdir(file_metadata_directory, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
 
 		file_metadata_file = fopen(file_metadata_path, "w");
 	} else {
@@ -277,15 +303,59 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		file_metadata_file = fopen(file_metadata_path, "w");
 	}
 
-	int i;
+	char * metadata_content = malloc(1);
+	metadata_content[0] = '\0';
+	string_append(&metadata_content, "DIRECTORY=N\n");
+	string_append(&metadata_content, "SIZE=");
+	string_append(&metadata_content, int_to_string(payload_size));
+	string_append(&metadata_content, "\nBLOCKS=[");
+
+	int i, written_bytes = 0;
 	log_info(LOGGER, "Allocated Blocks:");
 	for(i=0 ; i<necessary_blocks ; i++) {
 		int * v = list_get(blocks, i);
-		log_info(LOGGER, "    %d", *v);
+		int vv = *v;
+		int to_write = 0;
+
+		if(i != 0) {
+			string_append(&metadata_content, ",");
+		}
+		string_append(&metadata_content, int_to_string(vv));
+
+		if(payload_size - written_bytes > tall_grass->block_size) {
+			to_write = tall_grass->block_size;
+		} else {
+			to_write = payload_size - written_bytes;
+		}
+
+		char * block_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+		string_append(&block_path, "/Blocks/");
+		string_append(&block_path, int_to_string(vv));
+		string_append(&block_path, ".bin");
+
+		log_info(LOGGER, "writing to %s", block_path);
+
+		FILE * block_file = fopen(block_path, "w");
+			fwrite(payload + i*tall_grass->block_size, to_write, 1, block_file);
+		fclose(block_file);
+
+		bitarray_set_bit(tall_grass->bitmap, vv);
+
+		written_bytes += to_write;
 	}
 
-	free(file_metadata_path);
-	free(directory_path);
+	save_bitmap();
+
+	string_append(&metadata_content, "]\nOPEN=N");
+
+	fprintf(file_metadata_file, "%s", metadata_content);
+	fclose(file_metadata_file);
+}
+
+char * int_to_string(int number) {
+	char * s = malloc(sizeof(char) * 10);
+	sprintf(s, "%d", number);
+	return s;
 }
 
 int broker_server_function() {
