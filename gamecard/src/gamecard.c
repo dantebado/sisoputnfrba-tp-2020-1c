@@ -12,6 +12,9 @@ void setup_tall_grass();
 int broker_server_function();
 int server_function();
 
+char * tall_grass_get_or_create_directory(char * path);
+int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
+
 int main(int argc, char **argv) {
 	setup(argc, argv);
 
@@ -90,6 +93,7 @@ void save_bitmap() {
 	fwrite(tall_grass->bitmap->bitarray, tall_grass->blocks / 8, 1, bitmap_file);
 
 	fclose(bitmap_file);
+	free(_tall_grass_bitmap_path);
 }
 
 void setup_tall_grass() {
@@ -149,6 +153,57 @@ void setup_tall_grass() {
 	}
 
 	log_info(LOGGER, "%d total bytes, %d free", tall_grass->total_bytes, tall_grass->free_bytes);
+
+
+	//TEST
+
+	log_info(LOGGER, "%s", tall_grass_get_or_create_directory("/home"));
+}
+
+char * tall_grass_get_or_create_directory(char * path) {
+	char * directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+	string_append(&directory_path, "/Files");
+	string_append(&directory_path, path);
+
+	char * directory_metadata = string_duplicate(directory_path);
+	string_append(&directory_metadata, "/Metadata.bin");
+
+	FILE * directory_metadata_file = fopen(directory_metadata, "r");
+
+	if(directory_metadata_file == NULL) {
+		log_info(LOGGER, "Creating directory");
+		directory_metadata_file = fopen(directory_metadata, "w");
+
+		if(directory_metadata_file == NULL) {
+			log_info(LOGGER, "Must create in file system");
+			mkdir(directory_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+		} else {
+			log_info(LOGGER, "Folder was present in host");
+		}
+
+		directory_metadata_file = fopen(directory_metadata, "w+");
+		fprintf(directory_metadata_file, "DIRECTORY=Y");
+	}
+	fclose(directory_metadata_file);
+
+	log_info(LOGGER, "Loading directory %s", path);
+	t_config * dconfig = config_create(directory_metadata);
+
+	char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
+
+	if(strcmp(is_directory, "Y") == 0) {
+		return directory_path;
+	} else {
+		log_error(LOGGER, "Desired path %s exists as a path", path);
+	}
+	free(is_directory);
+
+	config_destroy(dconfig);
+	return NULL;
+}
+
+int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size) {
+
 }
 
 int broker_server_function() {

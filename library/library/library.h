@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
+
 #include <commons/log.h>
 #include <commons/bitarray.h>
 #include <commons/config.h>
