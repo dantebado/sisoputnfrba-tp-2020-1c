@@ -16,6 +16,10 @@ void debug_bitmap();
 void setup_tall_grass();
 char * tall_grass_get_or_create_directory(char * path);
 t_list * find_free_blocks(int count);
+int aux_round_up(int int_value, float float_value);
+int try_open_file(char * path, char * filename);
+int try_close_file(char * path, char * filename);
+char * tall_grass_read_file(char * path, char * filename);
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
 
 char * int_to_string(int number);
@@ -170,7 +174,8 @@ void setup_tall_grass() {
 
 	//TEST
 
-	tall_grass_save_file("/home", "test1", "hol", 3);
+	//tall_grass_save_file("/home", "test1", "hol", 3);
+	log_info(LOGGER, "%s", tall_grass_read_file("/home", "test1"));
 }
 
 char * tall_grass_get_or_create_directory(char * path) {
@@ -184,14 +189,11 @@ char * tall_grass_get_or_create_directory(char * path) {
 	FILE * directory_metadata_file = fopen(directory_metadata, "r");
 
 	if(directory_metadata_file == NULL) {
-		log_info(LOGGER, "Creating directory");
 		directory_metadata_file = fopen(directory_metadata, "w");
 
 		if(directory_metadata_file == NULL) {
-			log_info(LOGGER, "Must create in file system");
 			mkdir(directory_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
 		} else {
-			log_info(LOGGER, "Folder was present in host");
 		}
 
 		directory_metadata_file = fopen(directory_metadata, "w+");
@@ -199,16 +201,14 @@ char * tall_grass_get_or_create_directory(char * path) {
 	}
 	fclose(directory_metadata_file);
 
-	log_info(LOGGER, "Loading directory %s", path);
 	t_config * dconfig = config_create(directory_metadata);
 
 	char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
 
 	if(strcmp(is_directory, "Y") == 0) {
-		log_info(LOGGER, "Loaded directory %s", path);
 		return directory_path;
 	} else {
-		log_error(LOGGER, "Desired path %s exists as a path", path);
+		log_error(LOGGER, "Desired path %s exists as a file", path);
 	}
 	free(is_directory);
 
@@ -241,11 +241,144 @@ int aux_round_up(int int_value, float float_value) {
 	return float_value - int_value > 0 ? int_value + 1 : int_value;
 }
 
+int try_open_file(char * path, char * filename) {
+	char * directory_path = tall_grass_get_or_create_directory(path);
+
+	if(directory_path == NULL) {
+		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		return false;
+	}
+
+	char * file_metadata_path = string_duplicate(directory_path);
+	string_append(&file_metadata_path, "/");
+	string_append(&file_metadata_path, filename);
+	string_append(&file_metadata_path, "/Metadata.bin");
+
+	FILE * file_metadata_file = fopen(file_metadata_path, "r");
+	if(file_metadata_file == NULL) {
+		log_error(LOGGER, "File doesnt exists");
+		return NULL;
+	}
+	t_config * existing_config = config_create(file_metadata_path);
+
+	char * is_open = config_get_string_value(existing_config, "OPEN");
+	if(strcmp(is_open, "Y") == 0) {
+		log_error(LOGGER, "Cannot open file %s, is already open", filename);
+		config_destroy(existing_config);
+		return false;
+	}
+
+	config_set_value(existing_config, "OPEN", "Y");
+	config_save(existing_config);
+	return true;
+}
+
+int try_close_file(char * path, char * filename) {
+	char * directory_path = tall_grass_get_or_create_directory(path);
+
+	if(directory_path == NULL) {
+		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		return false;
+	}
+
+	char * file_metadata_path = string_duplicate(directory_path);
+	string_append(&file_metadata_path, "/");
+	string_append(&file_metadata_path, filename);
+	string_append(&file_metadata_path, "/Metadata.bin");
+
+	FILE * file_metadata_file = fopen(file_metadata_path, "r");
+	if(file_metadata_file == NULL) {
+		log_error(LOGGER, "File doesnt exists");
+		return NULL;
+	}
+	t_config * existing_config = config_create(file_metadata_path);
+
+	char * is_open = config_get_string_value(existing_config, "OPEN");
+	if(strcmp(is_open, "N") == 0) {
+		log_error(LOGGER, "Cannot close file %s, is already closed", filename);
+		config_destroy(existing_config);
+		return false;
+	}
+
+	config_set_value(existing_config, "OPEN", "N");
+	config_save(existing_config);
+	return true;
+}
+
+char * tall_grass_read_file(char * path, char * filename) {
+	char * directory_path = tall_grass_get_or_create_directory(path);
+
+	if(directory_path == NULL) {
+		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		return false;
+	}
+
+	if(!try_open_file(path, filename)) {
+		return NULL;
+	}
+
+	char * file_metadata_path = string_duplicate(directory_path);
+	string_append(&file_metadata_path, "/");
+	string_append(&file_metadata_path, filename);
+	string_append(&file_metadata_path, "/Metadata.bin");
+
+	FILE * file_metadata_file = fopen(file_metadata_path, "r");
+	if(file_metadata_file == NULL) {
+		log_error(LOGGER, "File doesnt exists");
+		return NULL;
+	}
+	t_config * existing_config = config_create(file_metadata_path);
+
+	char ** allocated_blocks = config_get_array_value(existing_config, "BLOCKS");
+	int content_size = config_get_int_value(existing_config, "SIZE");
+	int existing_blocks = aux_round_up(content_size / tall_grass->block_size,
+			content_size / (float)tall_grass->block_size);
+
+	int o, readed = 0;
+	char * content = malloc(sizeof(content_size));
+	for(o=0 ; o<existing_blocks ; o++) {
+		char * string_block = allocated_blocks[o];
+		char * block_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+		string_append(&block_path, "/Blocks/");
+		string_append(&block_path, string_block);
+		string_append(&block_path, ".bin");
+
+		FILE * block_file = fopen(block_path, "r");
+		if(block_file == NULL) {
+			log_error(LOGGER, "Cannot read file. Error fetching block %s", string_block);
+		}
+
+		int to_read = 0;
+		if(content_size - readed > tall_grass->block_size) {
+			to_read = tall_grass->block_size;
+		} else {
+			to_read = content_size - readed;
+		}
+
+		char * tbc = malloc(sizeof(char) * to_read);
+		fread(tbc, to_read, 1, block_file);
+		memcpy(content + readed, tbc, to_read);
+		free(tbc);
+		fclose(block_file);
+		readed += to_read;
+	}
+
+	content[content_size] = '\0';
+
+	try_open_file(path, filename);
+
+	return content;
+}
+
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size) {
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
 		log_error(LOGGER, "Cannot create file");
+		return false;
+	}
+
+	if(!try_open_file(path, filename)) {
 		return false;
 	}
 
@@ -279,20 +412,11 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 	} else {
 		fclose(file_metadata_file);
 
-		log_info(LOGGER, "File exists, loading current metadata");
-
 		t_config * existing_config = config_create(file_metadata_path);
 
 		char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
 		if(strcmp(is_directory, "Y") == 0) {
 			log_error(LOGGER, "Cannot edit file %s, is a directory", filename);
-			config_destroy(existing_config);
-			return false;
-		}
-
-		char * is_open = config_get_string_value(existing_config, "OPEN");
-		if(strcmp(is_open, "Y") == 0) {
-			log_error(LOGGER, "Cannot edit file %s, is open", filename);
 			config_destroy(existing_config);
 			return false;
 		}
@@ -381,12 +505,13 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	save_bitmap();
 
-	string_append(&metadata_content, "]\nOPEN=N");
+	string_append(&metadata_content, "]\nOPEN=Y");
 
 	fprintf(file_metadata_file, "%s", metadata_content);
 	fclose(file_metadata_file);
 
-	log_info(LOGGER, "File saved");
+	try_open_file(path, filename);
+
 	return true;
 }
 
