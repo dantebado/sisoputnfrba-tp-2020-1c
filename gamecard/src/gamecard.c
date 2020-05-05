@@ -178,6 +178,66 @@ void setup_tall_grass() {
 	log_info(LOGGER, "%s", tall_grass_read_file("/home", "test1"));
 }
 
+int broker_server_function() {
+	int success_listening = failed;
+	do {
+		log_info(LOGGER, "Attempting to connect to broker");
+		if((CONFIG.broker_socket = create_socket()) == failed) {
+			log_info(LOGGER, "Cannot create socket to connect to broker");
+		} else if(connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port) == failed) {
+			log_info(LOGGER, "Cannot connect to broker terminal. Retrying...");
+			close_socket(CONFIG.broker_socket);
+			sleep(CONFIG.retry_time_conn);
+		} else {
+			success_listening = success;
+		}
+	} while (success_listening == failed);
+
+	log_info(LOGGER, "Subscribing to Queue NEW_POKEMON");
+	subscribe_to_queue(CONFIG.broker_socket, QUEUE_NEW_POKEMON);
+	log_info(LOGGER, "Subscribing to Queue CATCH_POKEMON");
+	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CATCH_POKEMON);
+	log_info(LOGGER, "Subscribing to Queue GET_POKEMON");
+	subscribe_to_queue(CONFIG.broker_socket, QUEUE_GET_POKEMON);
+
+	log_info(LOGGER, "Awaiting message from Broker");
+	while(1) {
+		net_message_header * header = malloc(sizeof(net_message_header));
+		read(CONFIG.broker_socket, header, sizeof(net_message_header));
+
+		queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
+		send_message_acknowledge(message, CONFIG.broker_socket);
+
+		process_pokemon_message(message, 1);
+	}
+
+	return 0;
+}
+
+int server_function() {
+	log_info(LOGGER, "Server Started. Listening on port %d", CONFIG.gamecard_port);
+	void new(int fd, char * ip, int port) {
+	}
+	void lost(int fd, char * ip, int port) {
+	}
+	void incoming(int fd, char * ip, int port, net_message_header * header) {
+		switch(header->type) {
+			case NEW_MESSAGE:;
+				queue_message * message = receive_pokemon_message(fd);
+				process_pokemon_message(message, 0);
+				break;
+			default:
+				log_error(LOGGER, "Gamecard received unknown message type %d from external source", header->type);
+				break;
+		}
+	}
+	start_server(CONFIG.internal_socket, &new, &lost, &incoming);
+	return 0;
+}
+
+//TALLGRASS
+
+
 char * tall_grass_get_or_create_directory(char * path) {
 	char * directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
 	string_append(&directory_path, "/Files");
@@ -257,7 +317,7 @@ int try_open_file(char * path, char * filename) {
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
 		log_error(LOGGER, "File doesnt exists");
-		return NULL;
+		return false;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
 
@@ -289,7 +349,7 @@ int try_close_file(char * path, char * filename) {
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
 		log_error(LOGGER, "File doesnt exists");
-		return NULL;
+		return false;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
 
@@ -519,61 +579,4 @@ char * int_to_string(int number) {
 	char * s = malloc(sizeof(char) * 10);
 	sprintf(s, "%d", number);
 	return s;
-}
-
-int broker_server_function() {
-	int success_listening = failed;
-	do {
-		log_info(LOGGER, "Attempting to connect to broker");
-		if((CONFIG.broker_socket = create_socket()) == failed) {
-			log_info(LOGGER, "Cannot create socket to connect to broker");
-		} else if(connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port) == failed) {
-			log_info(LOGGER, "Cannot connect to broker terminal. Retrying...");
-			close_socket(CONFIG.broker_socket);
-			sleep(CONFIG.retry_time_conn);
-		} else {
-			success_listening = success;
-		}
-	} while (success_listening == failed);
-
-	log_info(LOGGER, "Subscribing to Queue NEW_POKEMON");
-	subscribe_to_queue(CONFIG.broker_socket, QUEUE_NEW_POKEMON);
-	log_info(LOGGER, "Subscribing to Queue CATCH_POKEMON");
-	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CATCH_POKEMON);
-	log_info(LOGGER, "Subscribing to Queue GET_POKEMON");
-	subscribe_to_queue(CONFIG.broker_socket, QUEUE_GET_POKEMON);
-
-	log_info(LOGGER, "Awaiting message from Broker");
-	while(1) {
-		net_message_header * header = malloc(sizeof(net_message_header));
-		read(CONFIG.broker_socket, header, sizeof(net_message_header));
-
-		queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
-		send_message_acknowledge(message, CONFIG.broker_socket);
-
-		process_pokemon_message(message, 1);
-	}
-
-	return 0;
-}
-
-int server_function() {
-	log_info(LOGGER, "Server Started. Listening on port %d", CONFIG.gamecard_port);
-	void new(int fd, char * ip, int port) {
-	}
-	void lost(int fd, char * ip, int port) {
-	}
-	void incoming(int fd, char * ip, int port, net_message_header * header) {
-		switch(header->type) {
-			case NEW_MESSAGE:;
-				queue_message * message = receive_pokemon_message(fd);
-				process_pokemon_message(message, 0);
-				break;
-			default:
-				log_error(LOGGER, "Gamecard received unknown message type %d from external source", header->type);
-				break;
-		}
-	}
-	start_server(CONFIG.internal_socket, &new, &lost, &incoming);
-	return 0;
 }
