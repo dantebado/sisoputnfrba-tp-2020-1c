@@ -170,6 +170,15 @@ typedef struct {
  * GAMECARD
  *
  * */
+
+typedef struct {
+	int block_size;
+	int blocks;
+	char * magic_number;
+
+	t_bitarray * bitmap;
+} tall_grass_fs;
+
 typedef struct {
 	int retry_time_conn;
 	int retry_time_op;

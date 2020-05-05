@@ -3,8 +3,12 @@
 //GLOBAL VARIABLES
 gamecard_config CONFIG;
 
+tall_grass_fs * tall_grass;
+
 //PROTOTYPES
 void setup(int argc, char **argv);
+void save_bitmap();
+void setup_tall_grass();
 int broker_server_function();
 int server_function();
 
@@ -61,7 +65,9 @@ void setup(int argc, char **argv) {
 
 	log_info(LOGGER, "Configuration Loaded");
 
-	if((CONFIG.internal_socket = create_socket()) == failed) {
+	setup_tall_grass();
+
+	/*if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
 		return;
 	}
@@ -73,7 +79,60 @@ void setup(int argc, char **argv) {
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);
+	pthread_join(CONFIG.broker_thread, NULL);*/
+}
+
+void save_bitmap() {
+	char * _tall_grass_bitmap_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+	string_append(&_tall_grass_bitmap_path, "/Metadata/Bitmap.bin");
+	FILE * bitmap_file = fopen(_tall_grass_bitmap_path, "w");
+
+	fwrite(tall_grass->bitmap->bitarray, tall_grass->blocks / 8, 1, bitmap_file);
+
+	fclose(bitmap_file);
+}
+
+void setup_tall_grass() {
+	log_info(LOGGER, "Starting TallGrass");
+
+	char * _tall_grass_metadata_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+	string_append(&_tall_grass_metadata_path, "/Metadata/Metadata.bin");
+
+	t_config * _TG_CONFIG = config_create(_tall_grass_metadata_path);
+
+	tall_grass = malloc(sizeof(tall_grass_fs));
+
+	tall_grass->block_size = config_get_int_value(_TG_CONFIG, "BLOCK_SIZE");
+	tall_grass->blocks = config_get_int_value(_TG_CONFIG, "BLOCKS");
+	tall_grass->magic_number = config_get_string_value(_TG_CONFIG, "MAGIC_NUMBER");
+
+	log_info(LOGGER, "Initing TallGrass with %d blocks of %d bytes and %s magic number",
+			tall_grass->blocks, tall_grass->block_size, tall_grass->magic_number);
+
+	char * _tall_grass_bitmap_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+	string_append(&_tall_grass_bitmap_path, "/Metadata/Bitmap.bin");
+	FILE * bitmap_file = fopen(_tall_grass_bitmap_path, "r");
+	if(bitmap_file == NULL) {
+		log_info(LOGGER, "There was no Bitmap file, creating");
+		bitmap_file = fopen(_tall_grass_bitmap_path, "w");
+		fclose(bitmap_file);
+
+		void * bitmap_data = malloc(tall_grass->blocks / 8); //TODO Que pasa si no son multiplos de ocho
+		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
+		int i;
+		for(i=0 ; i<tall_grass->blocks ; i++) {
+			bitarray_clean_bit(tall_grass->bitmap, i);
+		}
+		save_bitmap();
+	} else {
+		log_info(LOGGER, "Loading Bitmap");
+
+		void * bitmap_data = malloc(tall_grass->blocks / 8); //TODO Que pasa si no son multiplos de ocho
+		fread(bitmap_data, tall_grass->blocks / 8, 1, bitmap_file);
+		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
+
+		fclose(bitmap_file);
+	}
 }
 
 int broker_server_function() {
