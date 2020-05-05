@@ -170,7 +170,7 @@ void setup_tall_grass() {
 
 	//TEST
 
-	tall_grass_save_file("/home", "test", "hola!", 5);
+	tall_grass_save_file("/home", "test1", "hol", 3);
 }
 
 char * tall_grass_get_or_create_directory(char * path) {
@@ -205,13 +205,12 @@ char * tall_grass_get_or_create_directory(char * path) {
 	char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
 
 	if(strcmp(is_directory, "Y") == 0) {
+		log_info(LOGGER, "Loaded directory %s", path);
 		return directory_path;
 	} else {
 		log_error(LOGGER, "Desired path %s exists as a path", path);
 	}
 	free(is_directory);
-
-	log_info(LOGGER, "Loaded directory %s", path);
 
 	config_destroy(dconfig);
 	return NULL;
@@ -223,8 +222,9 @@ t_list * find_free_blocks(int count) {
 	int i, allocated = 0;
 	for(i=0 ; i<tall_grass->blocks && allocated < count ; i++) {
 		if(!bitarray_test_bit(tall_grass->bitmap, i)) {
-			int v = i;
-			list_add(li, &v);
+			int *v = malloc(sizeof(int));
+			memcpy(v, &i, sizeof(int));
+			list_add(li, v);
 			allocated++;
 		}
 	}
@@ -279,6 +279,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 	} else {
 		fclose(file_metadata_file);
 
+		log_info(LOGGER, "File exists, loading current metadata");
+
 		t_config * existing_config = config_create(file_metadata_path);
 
 		char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
@@ -296,7 +298,35 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		}
 
 		char ** allocated_blocks = config_get_array_value(existing_config, "BLOCKS");
-		//TODO calc necessary blocks left
+
+		int existing_blocks = aux_round_up(config_get_int_value(existing_config, "SIZE") / tall_grass->block_size,
+				config_get_int_value(existing_config, "SIZE") / (float)tall_grass->block_size);
+		int blocks_left = necessary_blocks - existing_blocks;
+
+		blocks = list_create();
+
+		int o;
+		for(o=0 ; o<existing_blocks ; o++) {
+			char * string_block = allocated_blocks[o];
+			int int_block = atoi(string_block);
+			int * pint = malloc(sizeof(int));
+			memcpy(pint, &int_block, sizeof(int));
+			list_add(blocks, pint);
+		}
+
+		if(blocks_left > 0) {
+			t_list * more_blocks = find_free_blocks(blocks_left);
+			if(more_blocks == NULL) {
+				log_error(LOGGER, "No enough free blocks");
+				return false;
+			}
+			int k;
+			for(k=0 ; k<blocks_left ; k++) {
+				int * some_block = list_get(more_blocks, k);
+				list_add(blocks, some_block);
+			}
+			list_destroy(more_blocks);
+		}
 
 		config_destroy(existing_config);
 
@@ -311,7 +341,6 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 	string_append(&metadata_content, "\nBLOCKS=[");
 
 	int i, written_bytes = 0;
-	log_info(LOGGER, "Allocated Blocks:");
 	for(i=0 ; i<necessary_blocks ; i++) {
 		int * v = list_get(blocks, i);
 		int vv = *v;
@@ -333,8 +362,6 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		string_append(&block_path, int_to_string(vv));
 		string_append(&block_path, ".bin");
 
-		log_info(LOGGER, "writing to %s", block_path);
-
 		FILE * block_file = fopen(block_path, "w");
 			fwrite(payload + i*tall_grass->block_size, to_write, 1, block_file);
 		fclose(block_file);
@@ -343,6 +370,14 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 		written_bytes += to_write;
 	}
+	while(i < blocks->elements_count) {
+		int * v = list_get(blocks, i);
+		int vv = *v;
+
+		bitarray_clean_bit(tall_grass->bitmap, vv);
+
+		i++;
+	}
 
 	save_bitmap();
 
@@ -350,6 +385,9 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	fprintf(file_metadata_file, "%s", metadata_content);
 	fclose(file_metadata_file);
+
+	log_info(LOGGER, "File saved");
+	return true;
 }
 
 char * int_to_string(int number) {
