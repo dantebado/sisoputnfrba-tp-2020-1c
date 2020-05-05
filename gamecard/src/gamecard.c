@@ -157,7 +157,7 @@ void setup_tall_grass() {
 
 	//TEST
 
-	log_info(LOGGER, "%s", tall_grass_get_or_create_directory("/home"));
+	tall_grass_save_file("/home", "test", "hola", 5);
 }
 
 char * tall_grass_get_or_create_directory(char * path) {
@@ -202,8 +202,90 @@ char * tall_grass_get_or_create_directory(char * path) {
 	return NULL;
 }
 
-int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size) {
+t_list * find_free_blocks(int count) {
+	t_list * li = list_create();
 
+	int i, allocated = 0;
+	for(i=0 ; i<tall_grass->blocks && allocated < count ; i++) {
+		if(!bitarray_test_bit(tall_grass->bitmap, i)) {
+			int v = i;
+			list_add(li, &v);
+			allocated++;
+		}
+	}
+
+	if(allocated < count) {
+		return NULL;
+		list_destroy(li);
+	}
+
+	return li;
+}
+
+int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size) {
+	char * directory_path = tall_grass_get_or_create_directory(path);
+
+	if(directory_path == NULL) {
+		log_error(LOGGER, "Cannot create file");
+		return false;
+	}
+
+	int necessary_blocks = ceil(payload_size / tall_grass->block_size);
+	if(necessary_blocks == 0) necessary_blocks++;
+
+	t_list * blocks = NULL;
+
+	char * file_metadata_path = string_duplicate(directory_path);
+	string_append(&file_metadata_path, "/filename/");
+	string_append(&file_metadata_path, "/Metadata.bin");
+
+	FILE * file_metadata_file = fopen(file_metadata_path, "r");
+	if(file_metadata_file == NULL) {
+		log_info(LOGGER, "File doesnt exists, creating.");
+
+		blocks = find_free_blocks(necessary_blocks);
+		if(blocks == NULL) {
+			log_error(LOGGER, "Cannot find necessary free blocks (%d)", necessary_blocks);
+			return false;
+		}
+
+		file_metadata_file = fopen(file_metadata_path, "w");
+	} else {
+		fclose(file_metadata_file);
+
+		t_config * existing_config = config_create(file_metadata_path);
+
+		char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
+		if(strcmp(is_directory, "Y") == 0) {
+			log_error(LOGGER, "Cannot edit file %s, is a directory", filename);
+			config_destroy(existing_config);
+			return false;
+		}
+
+		char * is_open = config_get_string_value(existing_config, "OPEN");
+		if(strcmp(is_open, "Y") == 0) {
+			log_error(LOGGER, "Cannot edit file %s, is open", filename);
+			config_destroy(existing_config);
+			return false;
+		}
+
+		char ** allocated_blocks = config_get_array_value(existing_config, "BLOCKS");
+		//TODO calc necessary blocks left
+
+		config_destroy(existing_config);
+
+		file_metadata_file = fopen(file_metadata_path, "w");
+	}
+
+	int i;
+	log_info(LOGGER, "Allocated Blocks:");
+	for(i=0 ; i<necessary_blocks ; i++) {
+		int * v = list_get(blocks, i);
+		log_info(LOGGER, "    %d", *v);
+	}
+
+	free(file_metadata_path);
+	free(directory_path);
 }
 
 int broker_server_function() {
