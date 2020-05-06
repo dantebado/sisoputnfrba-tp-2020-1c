@@ -19,7 +19,7 @@ t_list * find_free_blocks(int count);
 int aux_round_up(int int_value, float float_value);
 int try_open_file(char * path, char * filename);
 int try_close_file(char * path, char * filename);
-char * tall_grass_read_file(char * path, char * filename);
+void * tall_grass_read_file(char * path, char * filename);
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
 
 char * int_to_string(int number);
@@ -79,7 +79,7 @@ void setup(int argc, char **argv) {
 
 	setup_tall_grass();
 
-	if((CONFIG.internal_socket = create_socket()) == failed) {
+/*	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
 		return;
 	}
@@ -91,7 +91,7 @@ void setup(int argc, char **argv) {
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);
+	pthread_join(CONFIG.broker_thread, NULL);	*/
 }
 
 int broker_server_function() {
@@ -359,7 +359,7 @@ int try_close_file(char * path, char * filename) {
 	return true;
 }
 
-char * tall_grass_read_file(char * path, char * filename) {
+void * tall_grass_read_file(char * path, char * filename) {
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
@@ -389,7 +389,7 @@ char * tall_grass_read_file(char * path, char * filename) {
 			content_size / (float)tall_grass->block_size);
 
 	int o, readed = 0;
-	char * content = malloc(sizeof(content_size));
+	void * content = malloc(sizeof(content_size));
 	for(o=0 ; o<existing_blocks ; o++) {
 		char * string_block = allocated_blocks[o];
 		char * block_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
@@ -417,9 +417,7 @@ char * tall_grass_read_file(char * path, char * filename) {
 		readed += to_read;
 	}
 
-	content[content_size] = '\0';
-
-	try_open_file(path, filename);
+	try_close_file(path, filename);
 
 	return content;
 }
@@ -570,7 +568,7 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	tall_grass->free_bytes = new_occupied_blocks * tall_grass->block_size;
 
-	try_open_file(path, filename);
+	try_close_file(path, filename);
 
 	return true;
 }
