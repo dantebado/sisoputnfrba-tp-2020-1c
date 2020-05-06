@@ -27,6 +27,12 @@ int try_close_file(char * path, char * filename);
 void * tall_grass_read_file(char * path, char * filename);
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
 int tall_grass_save_string_in_file(char * path, char * filename, char * content);
+pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf);
+pokemon_file * deserialize_pokemon_file(char * contents);
+pokemon_file_line * find_pokemon_file_line_for_location(pokemon_file * pf, int x, int y);
+pokemon_file * pokemon_file_create();
+pokemon_file_line * pokemon_file_line_create(int x, int y, int q);
+void debug_pokemon_file(pokemon_file * pf);
 
 char * int_to_string(int number);
 
@@ -85,7 +91,7 @@ void setup(int argc, char **argv) {
 
 	setup_tall_grass();
 
-	if((CONFIG.internal_socket = create_socket()) == failed) {
+	/*if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
 		return;
 	}
@@ -97,7 +103,7 @@ void setup(int argc, char **argv) {
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);
+	pthread_join(CONFIG.broker_thread, NULL); */
 }
 
 int broker_server_function() {
@@ -654,6 +660,99 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 int tall_grass_save_string_in_file(char * path, char * filename, char * content) {
 	return tall_grass_save_file(path, filename, content, strlen(content) + 1);
+}
+
+pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf) {
+	pokemon_file_serialized * data = malloc(sizeof(pokemon_file_serialized));
+
+	int f;
+	char * contents = malloc(1); contents[0] = '\0';
+	int contents_length = 1;
+	for(f=0 ; f<pf->locations->elements_count ; f++) {
+		pokemon_file_line * tl = list_get(pf->locations, f);
+
+		if(tl->quantity > 0) {
+			char * _x = int_to_string(tl->position->x);
+			char * _y = int_to_string(tl->position->y);
+			char * _q = int_to_string(tl->quantity);
+
+			contents_length += strlen(_x) + 1 + strlen(_y) + 1 +
+					strlen(_q) + 1;
+
+			string_append(&contents, _x);
+			string_append(&contents, "-");
+			string_append(&contents, _y);
+			string_append(&contents, "=");
+			string_append(&contents, _q);
+
+			if(f < pf->locations->elements_count - 1) {
+				string_append(&contents, "\n");
+			}
+		}
+	}
+
+	contents[contents_length-1] = '\0';
+
+	data->content = contents;
+	data->length = contents_length;
+
+	return data;
+}
+
+pokemon_file * deserialize_pokemon_file(char * contents) {
+	pokemon_file * file = pokemon_file_create();
+
+	char ** lines = string_split(contents, "\n");
+	int lines_q = count_character_in_string(contents, '\n') + 1;
+
+	int a;
+	for(a=0 ; a<lines_q && lines[a] != NULL ; a++) {
+		char * line = lines[a];
+		if(strcmp(line, "") != 0) {
+			int x, y, q;
+			sscanf(line, "%d-%d=%d", &x, &y, &q);
+			list_add(file->locations, pokemon_file_line_create(x, y, q));
+		}
+	}
+
+	return file;
+}
+
+pokemon_file_line * find_pokemon_file_line_for_location(pokemon_file * pf, int x, int y) {
+	int o;
+	pokemon_file_line * rr = NULL;
+	for(o=0 ; o<pf->locations->elements_count ; o++) {
+		pokemon_file_line * tl = list_get(pf->locations, o);
+		if(tl->position->x == x && tl->position->y == y) {
+			rr = tl;
+		}
+	}
+	if(rr == NULL) {
+		rr = pokemon_file_line_create(x, y, 0);
+		list_add(pf->locations, rr);
+	}
+	return rr;
+}
+
+pokemon_file * pokemon_file_create() {
+	pokemon_file * file = malloc(sizeof(pokemon_file));
+	file->locations = list_create();
+	return file;
+}
+
+pokemon_file_line * pokemon_file_line_create(int x, int y, int q) {
+	pokemon_file_line * line = malloc(sizeof(pokemon_file_line));
+	line->position = location_create(x, y);
+	line->quantity = q;
+	return line;
+}
+
+void debug_pokemon_file(pokemon_file * pf) {
+	int n;
+	for(n=0 ; n<pf->locations->elements_count ; n++) {
+		pokemon_file_line * tl = list_get(pf->locations, n);
+		log_info(LOGGER, "   [%d-%d] = %d", tl->position->x, tl->position->y, tl->quantity);
+	}
 }
 
 char * int_to_string(int number) {
