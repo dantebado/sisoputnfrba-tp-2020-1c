@@ -172,6 +172,20 @@ typedef struct {
  * */
 
 typedef struct {
+	int length;
+	char * content;
+} pokemon_file_serialized;
+
+typedef struct {
+	location * position;
+	int quantity;
+} pokemon_file_line;
+
+typedef struct {
+	t_list * locations;
+} pokemon_file;
+
+typedef struct {
 	int block_size;
 	int blocks;
 	char * magic_number;

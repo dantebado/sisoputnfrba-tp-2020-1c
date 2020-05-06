@@ -5,6 +5,9 @@ gamecard_config CONFIG;
 
 tall_grass_fs * tall_grass;
 
+sem_t * file_operation_mutex;
+sem_t * directory_operation_mutex;
+
 //PROTOTYPES
 int process_pokemon_message(queue_message * message, int from_broker);
 void setup(int argc, char **argv);
@@ -13,14 +16,23 @@ int server_function();
 
 void save_bitmap();
 void debug_bitmap();
+int count_character_in_string(char*str, char character);
+char ** split_directory_tree(char * full_path);
 void setup_tall_grass();
 char * tall_grass_get_or_create_directory(char * path);
 t_list * find_free_blocks(int count);
 int aux_round_up(int int_value, float float_value);
 int try_open_file(char * path, char * filename);
 int try_close_file(char * path, char * filename);
-char * tall_grass_read_file(char * path, char * filename);
+void * tall_grass_read_file(char * path, char * filename);
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
+int tall_grass_save_string_in_file(char * path, char * filename, char * content);
+pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf);
+pokemon_file * deserialize_pokemon_file(char * contents);
+pokemon_file_line * find_pokemon_file_line_for_location(pokemon_file * pf, int x, int y);
+pokemon_file * pokemon_file_create();
+pokemon_file_line * pokemon_file_line_create(int x, int y, int q);
+void debug_pokemon_file(pokemon_file * pf);
 
 char * int_to_string(int number);
 
@@ -157,6 +169,12 @@ int server_function() {
 void setup_tall_grass() {
 	log_info(LOGGER, "Starting TallGrass");
 
+	file_operation_mutex = malloc(sizeof(sem_t));
+	sem_init(file_operation_mutex, NULL, 1);
+
+	directory_operation_mutex = malloc(sizeof(sem_t));
+	sem_init(directory_operation_mutex, NULL, 1);
+
 	char * _tall_grass_metadata_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
 	string_append(&_tall_grass_metadata_path, "/Metadata/Metadata.bin");
 
@@ -232,42 +250,70 @@ void debug_bitmap() {
 	}
 }
 
+int count_character_in_string(char*str, char character) {
+	int i, counter = 0;
+	for(i=0 ; i<strlen(str) ; i++) {
+		if(str[i] == character) {
+			counter++;
+		}
+	}
+	return counter;
+}
+
+char ** split_directory_tree(char * full_path) {
+	return string_split(full_path, "/");
+}
+
 char * tall_grass_get_or_create_directory(char * path) {
-	char * directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
-	string_append(&directory_path, "/Files");
-	string_append(&directory_path, path);
+	sem_wait(directory_operation_mutex);
 
-	char * directory_metadata = string_duplicate(directory_path);
-	string_append(&directory_metadata, "/Metadata.bin");
+	char ** dp = split_directory_tree(path);
+	int count = count_character_in_string(path, '/');
 
-	FILE * directory_metadata_file = fopen(directory_metadata, "r");
+	int l;
+	char * directory_path = NULL;
+	char * acumulator_for_path = malloc(sizeof(1)); acumulator_for_path[0] = '\0';
+	for(l=0 ; l<count ; l++) {
+		string_append(&acumulator_for_path, "/");
+		string_append(&acumulator_for_path, dp[l]);
 
-	if(directory_metadata_file == NULL) {
-		directory_metadata_file = fopen(directory_metadata, "w");
+		directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+		string_append(&directory_path, "/Files");
+		string_append(&directory_path, acumulator_for_path);
+
+		char * directory_metadata = string_duplicate(directory_path);
+		string_append(&directory_metadata, "/Metadata.bin");
+
+		FILE * directory_metadata_file = fopen(directory_metadata, "r");
 
 		if(directory_metadata_file == NULL) {
-			mkdir(directory_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+			directory_metadata_file = fopen(directory_metadata, "w");
+
+			if(directory_metadata_file == NULL) {
+				mkdir(directory_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+			} else {
+				fclose(directory_metadata_file);
+			}
+
+			directory_metadata_file = fopen(directory_metadata, "w+");
+			fprintf(directory_metadata_file, "DIRECTORY=Y");
+		}
+		fclose(directory_metadata_file);
+
+		t_config * dconfig = config_create(directory_metadata);
+
+		char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
+
+		if(strcmp(is_directory, "Y") == 0) {
 		} else {
+			log_error(LOGGER, "Desired path %s exists as a file", acumulator_for_path);
 		}
 
-		directory_metadata_file = fopen(directory_metadata, "w+");
-		fprintf(directory_metadata_file, "DIRECTORY=Y");
+		config_destroy(dconfig);
 	}
-	fclose(directory_metadata_file);
 
-	t_config * dconfig = config_create(directory_metadata);
-
-	char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
-
-	if(strcmp(is_directory, "Y") == 0) {
-		return directory_path;
-	} else {
-		log_error(LOGGER, "Desired path %s exists as a file", path);
-	}
-	free(is_directory);
-
-	config_destroy(dconfig);
-	return NULL;
+	sem_post(directory_operation_mutex);
+	return directory_path;
 }
 
 t_list * find_free_blocks(int count) {
@@ -296,10 +342,14 @@ int aux_round_up(int int_value, float float_value) {
 }
 
 int try_open_file(char * path, char * filename) {
+	sem_wait(file_operation_mutex);
+
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
-		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		log_error(LOGGER, "Cannot open file. Directory doesnt exist");
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
@@ -311,27 +361,45 @@ int try_open_file(char * path, char * filename) {
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
 		log_error(LOGGER, "File doesnt exists");
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
+
+	char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
+	if(strcmp(is_directory, "Y") == 0) {
+		log_error(LOGGER, "Cannot close file %s, is a directory", filename);
+		config_destroy(existing_config);
+		return false;
+	}
 
 	char * is_open = config_get_string_value(existing_config, "OPEN");
 	if(strcmp(is_open, "Y") == 0) {
 		log_error(LOGGER, "Cannot open file %s, is already open", filename);
 		config_destroy(existing_config);
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
 	config_set_value(existing_config, "OPEN", "Y");
 	config_save(existing_config);
+
+	sem_post(file_operation_mutex);
+
 	return true;
 }
 
 int try_close_file(char * path, char * filename) {
+	sem_wait(file_operation_mutex);
+
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
-		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		log_error(LOGGER, "Cannot close file. Directory doesnt exist");
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
@@ -342,24 +410,38 @@ int try_close_file(char * path, char * filename) {
 
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
-		log_error(LOGGER, "File doesnt exists");
+		log_error(LOGGER, "Cannot close file %s. File doesnt exists", filename);
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
+
+	char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
+	if(strcmp(is_directory, "Y") == 0) {
+		log_error(LOGGER, "Cannot open file %s, is a directory", filename);
+		config_destroy(existing_config);
+		return false;
+	}
 
 	char * is_open = config_get_string_value(existing_config, "OPEN");
 	if(strcmp(is_open, "N") == 0) {
 		log_error(LOGGER, "Cannot close file %s, is already closed", filename);
 		config_destroy(existing_config);
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
 	config_set_value(existing_config, "OPEN", "N");
 	config_save(existing_config);
+
+	sem_post(file_operation_mutex);
+
 	return true;
 }
 
-char * tall_grass_read_file(char * path, char * filename) {
+void * tall_grass_read_file(char * path, char * filename) {
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
@@ -389,7 +471,7 @@ char * tall_grass_read_file(char * path, char * filename) {
 			content_size / (float)tall_grass->block_size);
 
 	int o, readed = 0;
-	char * content = malloc(sizeof(content_size));
+	void * content = malloc(sizeof(content_size));
 	for(o=0 ; o<existing_blocks ; o++) {
 		char * string_block = allocated_blocks[o];
 		char * block_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
@@ -417,9 +499,7 @@ char * tall_grass_read_file(char * path, char * filename) {
 		readed += to_read;
 	}
 
-	content[content_size] = '\0';
-
-	try_open_file(path, filename);
+	try_close_file(path, filename);
 
 	return content;
 }
@@ -429,10 +509,6 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	if(directory_path == NULL) {
 		log_error(LOGGER, "Cannot create file");
-		return false;
-	}
-
-	if(!try_open_file(path, filename)) {
 		return false;
 	}
 
@@ -454,7 +530,6 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
-		log_info(LOGGER, "File doesnt exists, creating.");
 
 		blocks = find_free_blocks(necessary_blocks);
 		if(blocks == NULL) {
@@ -468,12 +543,18 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 	} else {
 		fclose(file_metadata_file);
 
+		if(!try_open_file(path, filename)) {
+			return false;
+		}
+
 		t_config * existing_config = config_create(file_metadata_path);
 
 		char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
 		if(strcmp(is_directory, "Y") == 0) {
 			log_error(LOGGER, "Cannot edit file %s, is a directory", filename);
 			config_destroy(existing_config);
+
+			try_close_file(path, filename);
 			return false;
 		}
 
@@ -500,6 +581,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 			t_list * more_blocks = find_free_blocks(blocks_left);
 			if(more_blocks == NULL) {
 				log_error(LOGGER, "No enough free blocks");
+
+				try_close_file(path, filename);
 				return false;
 			}
 			int k;
@@ -570,9 +653,106 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	tall_grass->free_bytes = new_occupied_blocks * tall_grass->block_size;
 
-	try_open_file(path, filename);
+	try_close_file(path, filename);
 
 	return true;
+}
+
+int tall_grass_save_string_in_file(char * path, char * filename, char * content) {
+	return tall_grass_save_file(path, filename, content, strlen(content) + 1);
+}
+
+pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf) {
+	pokemon_file_serialized * data = malloc(sizeof(pokemon_file_serialized));
+
+	int f;
+	char * contents = malloc(1); contents[0] = '\0';
+	int contents_length = 1;
+	for(f=0 ; f<pf->locations->elements_count ; f++) {
+		pokemon_file_line * tl = list_get(pf->locations, f);
+
+		if(tl->quantity > 0) {
+			char * _x = int_to_string(tl->position->x);
+			char * _y = int_to_string(tl->position->y);
+			char * _q = int_to_string(tl->quantity);
+
+			contents_length += strlen(_x) + 1 + strlen(_y) + 1 +
+					strlen(_q) + 1;
+
+			string_append(&contents, _x);
+			string_append(&contents, "-");
+			string_append(&contents, _y);
+			string_append(&contents, "=");
+			string_append(&contents, _q);
+
+			if(f < pf->locations->elements_count - 1) {
+				string_append(&contents, "\n");
+			}
+		}
+	}
+
+	contents[contents_length-1] = '\0';
+
+	data->content = contents;
+	data->length = contents_length;
+
+	return data;
+}
+
+pokemon_file * deserialize_pokemon_file(char * contents) {
+	pokemon_file * file = pokemon_file_create();
+
+	char ** lines = string_split(contents, "\n");
+	int lines_q = count_character_in_string(contents, '\n') + 1;
+
+	int a;
+	for(a=0 ; a<lines_q && lines[a] != NULL ; a++) {
+		char * line = lines[a];
+		if(strcmp(line, "") != 0) {
+			int x, y, q;
+			sscanf(line, "%d-%d=%d", &x, &y, &q);
+			list_add(file->locations, pokemon_file_line_create(x, y, q));
+		}
+	}
+
+	return file;
+}
+
+pokemon_file_line * find_pokemon_file_line_for_location(pokemon_file * pf, int x, int y) {
+	int o;
+	pokemon_file_line * rr = NULL;
+	for(o=0 ; o<pf->locations->elements_count ; o++) {
+		pokemon_file_line * tl = list_get(pf->locations, o);
+		if(tl->position->x == x && tl->position->y == y) {
+			rr = tl;
+		}
+	}
+	if(rr == NULL) {
+		rr = pokemon_file_line_create(x, y, 0);
+		list_add(pf->locations, rr);
+	}
+	return rr;
+}
+
+pokemon_file * pokemon_file_create() {
+	pokemon_file * file = malloc(sizeof(pokemon_file));
+	file->locations = list_create();
+	return file;
+}
+
+pokemon_file_line * pokemon_file_line_create(int x, int y, int q) {
+	pokemon_file_line * line = malloc(sizeof(pokemon_file_line));
+	line->position = location_create(x, y);
+	line->quantity = q;
+	return line;
+}
+
+void debug_pokemon_file(pokemon_file * pf) {
+	int n;
+	for(n=0 ; n<pf->locations->elements_count ; n++) {
+		pokemon_file_line * tl = list_get(pf->locations, n);
+		log_info(LOGGER, "   [%d-%d] = %d", tl->position->x, tl->position->y, tl->quantity);
+	}
 }
 
 char * int_to_string(int number) {
