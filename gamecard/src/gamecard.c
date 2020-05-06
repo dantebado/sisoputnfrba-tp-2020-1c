@@ -91,7 +91,7 @@ void setup(int argc, char **argv) {
 
 	setup_tall_grass();
 
-	/*if((CONFIG.internal_socket = create_socket()) == failed) {
+	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
 		return;
 	}
@@ -103,7 +103,7 @@ void setup(int argc, char **argv) {
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL); */
+	pthread_join(CONFIG.broker_thread, NULL);
 }
 
 int broker_server_function() {
