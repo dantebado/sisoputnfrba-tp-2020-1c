@@ -5,6 +5,9 @@ gamecard_config CONFIG;
 
 tall_grass_fs * tall_grass;
 
+sem_t * file_operation_mutex;
+sem_t * directory_operation_mutex;
+
 //PROTOTYPES
 int process_pokemon_message(queue_message * message, int from_broker);
 void setup(int argc, char **argv);
@@ -158,6 +161,12 @@ int server_function() {
 void setup_tall_grass() {
 	log_info(LOGGER, "Starting TallGrass");
 
+	file_operation_mutex = malloc(sizeof(sem_t));
+	sem_init(file_operation_mutex, NULL, 1);
+
+	directory_operation_mutex = malloc(sizeof(sem_t));
+	sem_init(directory_operation_mutex, NULL, 1);
+
 	char * _tall_grass_metadata_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
 	string_append(&_tall_grass_metadata_path, "/Metadata/Metadata.bin");
 
@@ -234,6 +243,8 @@ void debug_bitmap() {
 }
 
 char * tall_grass_get_or_create_directory(char * path) {
+	sem_wait(directory_operation_mutex);
+
 	char * directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
 	string_append(&directory_path, "/Files");
 	string_append(&directory_path, path);
@@ -261,6 +272,7 @@ char * tall_grass_get_or_create_directory(char * path) {
 	char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
 
 	if(strcmp(is_directory, "Y") == 0) {
+		sem_post(directory_operation_mutex);
 		return directory_path;
 	} else {
 		log_error(LOGGER, "Desired path %s exists as a file", path);
@@ -268,6 +280,9 @@ char * tall_grass_get_or_create_directory(char * path) {
 	free(is_directory);
 
 	config_destroy(dconfig);
+
+	sem_post(directory_operation_mutex);
+
 	return NULL;
 }
 
@@ -297,10 +312,14 @@ int aux_round_up(int int_value, float float_value) {
 }
 
 int try_open_file(char * path, char * filename) {
+	sem_wait(file_operation_mutex);
+
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
-		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		log_error(LOGGER, "Cannot open file. Directory doesnt exist");
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
@@ -312,27 +331,45 @@ int try_open_file(char * path, char * filename) {
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
 		log_error(LOGGER, "File doesnt exists");
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
+
+	char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
+	if(strcmp(is_directory, "Y") == 0) {
+		log_error(LOGGER, "Cannot close file %s, is a directory", filename);
+		config_destroy(existing_config);
+		return false;
+	}
 
 	char * is_open = config_get_string_value(existing_config, "OPEN");
 	if(strcmp(is_open, "Y") == 0) {
 		log_error(LOGGER, "Cannot open file %s, is already open", filename);
 		config_destroy(existing_config);
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
 	config_set_value(existing_config, "OPEN", "Y");
 	config_save(existing_config);
+
+	sem_post(file_operation_mutex);
+
 	return true;
 }
 
 int try_close_file(char * path, char * filename) {
+	sem_wait(file_operation_mutex);
+
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
-		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		log_error(LOGGER, "Cannot close file. Directory doesnt exist");
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
@@ -343,20 +380,34 @@ int try_close_file(char * path, char * filename) {
 
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
-		log_error(LOGGER, "File doesnt exists");
+		log_error(LOGGER, "Cannot close file %s. File doesnt exists", filename);
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
+
+	char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
+	if(strcmp(is_directory, "Y") == 0) {
+		log_error(LOGGER, "Cannot open file %s, is a directory", filename);
+		config_destroy(existing_config);
+		return false;
+	}
 
 	char * is_open = config_get_string_value(existing_config, "OPEN");
 	if(strcmp(is_open, "N") == 0) {
 		log_error(LOGGER, "Cannot close file %s, is already closed", filename);
 		config_destroy(existing_config);
+
+		sem_post(file_operation_mutex);
 		return false;
 	}
 
 	config_set_value(existing_config, "OPEN", "N");
 	config_save(existing_config);
+
+	sem_post(file_operation_mutex);
+
 	return true;
 }
 
@@ -449,7 +500,6 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
-		log_info(LOGGER, "File doesnt exists, creating.");
 
 		blocks = find_free_blocks(necessary_blocks);
 		if(blocks == NULL) {
@@ -473,6 +523,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		if(strcmp(is_directory, "Y") == 0) {
 			log_error(LOGGER, "Cannot edit file %s, is a directory", filename);
 			config_destroy(existing_config);
+
+			try_close_file(path, filename);
 			return false;
 		}
 
@@ -499,6 +551,8 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 			t_list * more_blocks = find_free_blocks(blocks_left);
 			if(more_blocks == NULL) {
 				log_error(LOGGER, "No enough free blocks");
+
+				try_close_file(path, filename);
 				return false;
 			}
 			int k;
