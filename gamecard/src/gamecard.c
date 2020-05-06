@@ -16,6 +16,8 @@ int server_function();
 
 void save_bitmap();
 void debug_bitmap();
+int count_character_in_string(char*str, char character);
+char ** split_directory_tree(char * full_path);
 void setup_tall_grass();
 char * tall_grass_get_or_create_directory(char * path);
 t_list * find_free_blocks(int count);
@@ -242,48 +244,70 @@ void debug_bitmap() {
 	}
 }
 
+int count_character_in_string(char*str, char character) {
+	int i, counter = 0;
+	for(i=0 ; i<strlen(str) ; i++) {
+		if(str[i] == character) {
+			counter++;
+		}
+	}
+	return counter;
+}
+
+char ** split_directory_tree(char * full_path) {
+	return string_split(full_path, "/");
+}
+
 char * tall_grass_get_or_create_directory(char * path) {
 	sem_wait(directory_operation_mutex);
 
-	char * directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
-	string_append(&directory_path, "/Files");
-	string_append(&directory_path, path);
+	char ** dp = split_directory_tree(path);
+	int count = count_character_in_string(path, '/');
 
-	char * directory_metadata = string_duplicate(directory_path);
-	string_append(&directory_metadata, "/Metadata.bin");
+	int l;
+	char * directory_path = NULL;
+	char * acumulator_for_path = malloc(sizeof(1)); acumulator_for_path[0] = '\0';
+	for(l=0 ; l<count ; l++) {
+		string_append(&acumulator_for_path, "/");
+		string_append(&acumulator_for_path, dp[l]);
 
-	FILE * directory_metadata_file = fopen(directory_metadata, "r");
+		directory_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
+		string_append(&directory_path, "/Files");
+		string_append(&directory_path, acumulator_for_path);
 
-	if(directory_metadata_file == NULL) {
-		directory_metadata_file = fopen(directory_metadata, "w");
+		char * directory_metadata = string_duplicate(directory_path);
+		string_append(&directory_metadata, "/Metadata.bin");
+
+		FILE * directory_metadata_file = fopen(directory_metadata, "r");
 
 		if(directory_metadata_file == NULL) {
-			mkdir(directory_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+			directory_metadata_file = fopen(directory_metadata, "w");
+
+			if(directory_metadata_file == NULL) {
+				mkdir(directory_path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+			} else {
+				fclose(directory_metadata_file);
+			}
+
+			directory_metadata_file = fopen(directory_metadata, "w+");
+			fprintf(directory_metadata_file, "DIRECTORY=Y");
+		}
+		fclose(directory_metadata_file);
+
+		t_config * dconfig = config_create(directory_metadata);
+
+		char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
+
+		if(strcmp(is_directory, "Y") == 0) {
 		} else {
+			log_error(LOGGER, "Desired path %s exists as a file", acumulator_for_path);
 		}
 
-		directory_metadata_file = fopen(directory_metadata, "w+");
-		fprintf(directory_metadata_file, "DIRECTORY=Y");
+		config_destroy(dconfig);
 	}
-	fclose(directory_metadata_file);
-
-	t_config * dconfig = config_create(directory_metadata);
-
-	char * is_directory = config_get_string_value(dconfig, "DIRECTORY");
-
-	if(strcmp(is_directory, "Y") == 0) {
-		sem_post(directory_operation_mutex);
-		return directory_path;
-	} else {
-		log_error(LOGGER, "Desired path %s exists as a file", path);
-	}
-	free(is_directory);
-
-	config_destroy(dconfig);
 
 	sem_post(directory_operation_mutex);
-
-	return NULL;
+	return directory_path;
 }
 
 t_list * find_free_blocks(int count) {
