@@ -21,6 +21,7 @@ int try_open_file(char * path, char * filename);
 int try_close_file(char * path, char * filename);
 void * tall_grass_read_file(char * path, char * filename);
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
+int tall_grass_save_string_in_file(char * path, char * filename, char * content);
 
 char * int_to_string(int number);
 
@@ -79,7 +80,7 @@ void setup(int argc, char **argv) {
 
 	setup_tall_grass();
 
-/*	if((CONFIG.internal_socket = create_socket()) == failed) {
+	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
 		return;
 	}
@@ -91,7 +92,7 @@ void setup(int argc, char **argv) {
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);	*/
+	pthread_join(CONFIG.broker_thread, NULL);
 }
 
 int broker_server_function() {
@@ -430,10 +431,6 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		return false;
 	}
 
-	if(!try_open_file(path, filename)) {
-		return false;
-	}
-
 	int necessary_blocks = aux_round_up(payload_size / tall_grass->block_size,
 			payload_size / (float)tall_grass->block_size);
 	if(necessary_blocks == 0) necessary_blocks++;
@@ -465,6 +462,10 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		file_metadata_file = fopen(file_metadata_path, "w");
 	} else {
 		fclose(file_metadata_file);
+
+		if(!try_open_file(path, filename)) {
+			return false;
+		}
 
 		t_config * existing_config = config_create(file_metadata_path);
 
@@ -571,6 +572,10 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 	try_close_file(path, filename);
 
 	return true;
+}
+
+int tall_grass_save_string_in_file(char * path, char * filename, char * content) {
+	return tall_grass_save_file(path, filename, content, strlen(content) + 1);
 }
 
 char * int_to_string(int number) {
