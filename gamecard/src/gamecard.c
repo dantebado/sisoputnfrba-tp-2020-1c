@@ -187,6 +187,7 @@ void setup_tall_grass() {
 	tall_grass->magic_number = config_get_string_value(_TG_CONFIG, "MAGIC_NUMBER");
 
 	tall_grass->blocks_in_bytes = tall_grass->blocks / 8; //TODO Que pasa si no son multiplos de ocho
+	//Siempre son multiplos de 8, papu
 	tall_grass->total_bytes = tall_grass->block_size * tall_grass->blocks;
 
 	log_info(LOGGER, "Initing TallGrass with %d blocks of %d bytes and %s magic number",
@@ -330,6 +331,7 @@ t_list * find_free_blocks(int count) {
 	}
 
 	if(allocated < count) {
+		//Alverre
 		return NULL;
 		list_destroy(li);
 	}
@@ -410,7 +412,7 @@ int try_close_file(char * path, char * filename) {
 
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
-		log_error(LOGGER, "Cannot close file %s. File doesnt exists", filename);
+		log_error(LOGGER, "Cannot close file %s. File does not exist", filename);
 
 		sem_post(file_operation_mutex);
 		return false;
@@ -419,14 +421,14 @@ int try_close_file(char * path, char * filename) {
 
 	char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
 	if(strcmp(is_directory, "Y") == 0) {
-		log_error(LOGGER, "Cannot open file %s, is a directory", filename);
+		log_error(LOGGER, "Cannot open file %s, it is a directory", filename);
 		config_destroy(existing_config);
 		return false;
 	}
 
 	char * is_open = config_get_string_value(existing_config, "OPEN");
 	if(strcmp(is_open, "N") == 0) {
-		log_error(LOGGER, "Cannot close file %s, is already closed", filename);
+		log_error(LOGGER, "Cannot close file %s, it is already closed", filename);
 		config_destroy(existing_config);
 
 		sem_post(file_operation_mutex);
@@ -445,7 +447,7 @@ void * tall_grass_read_file(char * path, char * filename) {
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
-		log_error(LOGGER, "Cannot read file. Directory doesnt exist");
+		log_error(LOGGER, "Cannot read file. Directory does not exist");
 		return false;
 	}
 
@@ -460,7 +462,7 @@ void * tall_grass_read_file(char * path, char * filename) {
 
 	FILE * file_metadata_file = fopen(file_metadata_path, "r");
 	if(file_metadata_file == NULL) {
-		log_error(LOGGER, "File doesnt exists");
+		log_error(LOGGER, "File does not exist");
 		return NULL;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
@@ -551,7 +553,7 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 
 		char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
 		if(strcmp(is_directory, "Y") == 0) {
-			log_error(LOGGER, "Cannot edit file %s, is a directory", filename);
+			log_error(LOGGER, "Cannot edit file %s, it is a directory", filename);
 			config_destroy(existing_config);
 
 			try_close_file(path, filename);
@@ -580,7 +582,7 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 		if(blocks_left > 0) {
 			t_list * more_blocks = find_free_blocks(blocks_left);
 			if(more_blocks == NULL) {
-				log_error(LOGGER, "No enough free blocks");
+				log_error(LOGGER, "Not enough free blocks");
 
 				try_close_file(path, filename);
 				return false;

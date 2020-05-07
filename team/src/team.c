@@ -26,6 +26,10 @@ pthread_t * exec_thread;
 
 t_list * get_pokemon_msgs_ids;
 
+
+//STATISTICS
+team_statistics statistics;
+
 //PROTOTYPES
 //Connections
 void setup(int argc, char **argv);
@@ -36,7 +40,7 @@ int server_function();
 void executing(trainer * t);
 void sort_queues();
 void sort_by_burst();
-float estimate(trainer_action*t);
+float estimate(trainer*t);
 void exec_thread_function();
 
 pokemon_requirement * find_requirement_by_pokemon_name(char * name);
@@ -360,6 +364,10 @@ void setup(int argc, char **argv) {
 
 	internal_broker_need = false;
 
+	statistics->context_switch_counter = 0;
+	statistics->global_cpu_counter = 0;
+	statistics->solved_deadlocks = 0;
+
 	get_pokemon_msgs_ids = list_create();
 	required_pokemons = list_create();
 
@@ -461,7 +469,8 @@ void setup(int argc, char **argv) {
 			t->stats->last_estimation = 0;
 			t->stats->quantum_counter = 0;
 			t->stats->status = NEW_ACTION;
-			t->stats->waiting_counter = 0;
+			t->stats->last_job_counter = 0;
+			t->stats->summation_quantum_counter = 0;
 
 			//CREAMOS EL HILO DE EJECUCION DEL ENTRENADOR
 			t->id = aux_counter;
@@ -525,12 +534,14 @@ void print_current_requirements() {
 	}
 }
 
-float estimate(trainer_action*t){
-	int alpha = 50;
+float estimate(trainer*t){
+	float alpha = 0.5; //Le damos igual importancia a rafagas cortas como largas
 
-	//FORMULA DE LA ESTIMACION??
-	float estimation = (alpha/100)*(t->quantum_counter) + (1-(alpha/100))*(t->last_estimation);
-	t->quantum_counter = 0;
+	//estimacion proxima = estimacion anterior * (1-alfa) + real anterior * alfa
+	float estimation = (t->stats->last_estimation) * (1 - alpha) + (t->stats->last_job_counter) * alpha;
+
+	//float estimation = (alpha/100)*(t->quantum_counter) + (1-(alpha/100))*(t->last_estimation);
+	t->stats->quantum_counter = 0;
 	log_info(LOGGER, "New estimation: %f", estimation);
 
 	return estimation;
@@ -538,8 +549,8 @@ float estimate(trainer_action*t){
 
 void sort_by_burst(){
 	//CASO DE SOLAMENTE DOS ENTRENADORES
-	int sort_burst_trainer(trainer_action * a_trainer, trainer_action * another_trainer){
-		return (a_trainer->estimation <= another_trainer->estimation);
+	int sort_burst_trainer(trainer * a_trainer, trainer * another_trainer){
+		return (a_trainer->stats->estimation <= another_trainer->stats->estimation);
 	}
 
 	//CASO GENERAL
@@ -611,11 +622,20 @@ void executing(trainer * t){
 
 		int quantum_ended = false;
 
+		t->stats->last_job_counter++;
+		t->stats->summation_quantum_counter++;
+
+		statistics->global_cpu_counter++;
+
 		t->stats->quantum_counter++;
 		if(CONFIG.planning_alg == RR) {
 			if(CONFIG.quantum == t->stats->quantum_counter) {
 				quantum_ended = true;
 			}
+		}else if(CONFIG.planning_alg == FIFO_PLANNING ||
+				CONFIG.planning_alg == SJF_SD ||
+				CONFIG.planning_alg == SJF_CD){
+			sort_queues();
 		}
 
 		switch(t->stats->current_activity->type) {
@@ -664,7 +684,7 @@ void executing(trainer * t){
 			case AWAITING_CAPTURE_RESULT:
 				break;
 			case TRADING:
-				//TODO: training
+				//TODO: trading
 				break;
 		}
 
@@ -728,6 +748,75 @@ void exec_thread_function() {
 		}
 	}
 }
+
+int is_trainer_waiting(int trainer_id){
+	int _is_trainer_waiting(trainer * a_trainer){
+		return a_trainer->id == trainer_id && a_trainer->stats->status == WAITING_ACTION;
+	}
+
+	return list_any_satisfy(trainers, (void*)_is_trainer_waiting);
+}
+
+int get_pokemons_owner(t_list pokemons){
+
+}
+
+trainer * find_allocation_node(t_list * trainer_pokemons_targets, int action_type){
+
+	bool _got_my_pokemon(t_list * a_trainer_pokemons){
+		int i = 0, j;
+		char * tmp_pokemon = list_get(trainer_pokemons_targets, i);
+		char * another_tmp_pokemon;
+
+		while(tmp_pokemon != NULL){
+			j = 0;
+			another_tmp_pokemon = list_get(a_trainer_pokemons, j);
+			while(another_tmp_pokemon != NULL){
+				if(strmcp(tmp_pokemon, another_tmp_pokemon) == 0){
+					return true;
+				}
+				j++;
+				another_tmp_pokemon = list_get(a_trainer_pokemons, j);
+			}
+			i++;
+			tmp_pokemon = list_get(trainer_pokemons_targets, i);
+		}
+		return false;
+	}
+
+	bool _allocation_trainer_node(trainer * a_trainer){
+		return a_trainer->stats->status == action_type &&
+				list_find(a_trainer->pokemons, (void*) _got_my_pokemon);
+	}
+
+	return list_find(trainers, (void*) _allocation_trainer_node);
+}
+
+int deadlock_check(trainer * waiting_trainer){
+	//TODO Importante!! Cuando un trainer captura un pokemon, el mismo se saca de la lista de targets
+
+
+
+	trainer * pokemon_owner = find_allocation_node(get_pokemons_owner(waiting_trainer->targets), BLOCKED_ACTION);
+
+	return circular_chain(pokemon_owner, waiting_trainer->id);
+}
+
+int circular_chain(trainer * cycle_trainer, int cycle_head_id){
+	if(!is_trainer_waiting(cycle_trainer->id)) return false;
+
+	trainer * pokemon_owner;
+	cycle_trainer = find_allocation_node(cycle_trainer->targets, WAITING_ACTION);
+	pokemon_owner = find_allocation_node(get_pokemon_owner(cycle_trainer->pokemons), BLOCKED_ACTION);
+
+	if(pokemon_owner->id == cycle_head_id) return true;
+
+	return circular_chain(pokemon_owner, cycle_head_id);
+}
+
+
+
+
 
 
 
