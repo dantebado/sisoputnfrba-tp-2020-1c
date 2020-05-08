@@ -236,7 +236,8 @@ typedef enum{
 typedef enum {
 	CAPTURING,
 	AWAITING_CAPTURE_RESULT,
-	TRADING
+	TRADING,
+	SOLVING_DEADLOCK
 } trainer_activity_type;
 
 typedef struct {

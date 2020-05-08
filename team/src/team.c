@@ -490,20 +490,6 @@ void setup(int argc, char **argv) {
 			t->stats->thread = thread_exec;
 
 			list_add(trainers, t);
-
-	/*		printf("ENTRENADOR %d", aux_counter);
-			printf("\n\tX = %d", t.x);
-			printf("\n\tY = %d", t.y);
-			printf("\n\tPOKEMONS = %d ( ", t.pokemons->elements_count);
-			for(i=0 ; i<count_pokemons ; i++) {
-				printf("%s ", list_get(t.pokemons, i));
-			}
-			printf(")");
-			printf("\n\tTARGETS = %d ( ", t.targets->elements_count);
-			for(i=0 ; i<count_targets ; i++) {
-				printf("%s ", list_get(t.targets, i));
-			}
-			printf(")\n\n");	*/
 		}
 	}
 
@@ -691,6 +677,40 @@ void executing(trainer * t){
 			case TRADING:
 				//TODO: trading
 				break;
+			case SOLVING_DEADLOCK:
+				log_info(LOGGER, "\tIs solving deadlock");
+
+				//Como te enteras de la posicion del entrenador bloqueado??
+
+				/*
+				if(location_are_the_same(location_create(apm->x, apm->y), location_create(t->x, t->y))) {
+
+					log_info(LOGGER, "\tIs already there, now trading");
+
+					t->stats->current_activity->type = TRADING;
+
+					t->stats->status = BLOCKED_ACTION;
+					executing_trainer = NULL;
+				} else {
+					log_info(LOGGER, "\tIs moving");
+					if(t->x != apm->x) {
+						if(t->x < apm->x) {
+							t->x++;
+						} else {
+							t->x--;
+						}
+					} else {
+						if(t->y < apm->y) {
+							t->y++;
+						} else {
+							t->y--;
+						}
+					}
+					log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
+				}
+				*/
+
+				break;
 		}
 
 		if(quantum_ended && executing_trainer != NULL) {
@@ -824,6 +844,16 @@ int is_in_deadlock(trainer * waiting_trainer){
 	return circular_chain(possible_deadlocked_trainers);
 }
 
+void solve_deadlock_for(trainer * myself){
+	t_list * deadlocked_trainers;
+	deadlocked_trainers = list_create();
+
+	deadlocked_trainers = find_pokemons_allocators(myself);
+
+	block_trainer(myself);
+
+
+}
 
 
 
