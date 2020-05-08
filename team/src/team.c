@@ -28,7 +28,7 @@ t_list * get_pokemon_msgs_ids;
 
 
 //STATISTICS
-team_statistics statistics;
+team_statistics * statistics;
 
 //PROTOTYPES
 //Connections
@@ -46,8 +46,13 @@ void exec_thread_function();
 pokemon_requirement * find_requirement_by_pokemon_name(char * name);
 
 //Trainers
-void block_trainer(trainer_action * ta);
+void block_trainer(trainer * t);
 trainer * closest_free_trainer(int pos_x, int pos_y);
+int is_in_deadlock(trainer * waiting_trainer);
+int circular_chain(t_list * trainers_to_check);
+t_list * find_pokemons_allocators(trainer * myself);
+int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself);
+int is_trainer_waiting(trainer * t);
 
 //Pokemons
 int is_required(char * pokemon);
@@ -77,8 +82,8 @@ int is_id_in_list(t_list * list, int value) {
 	return false;
 }
 
-void block_trainer(trainer_action * ta){
-	ta->status = BLOCKED_ACTION;
+void block_trainer(trainer * t){
+	t->stats->status = BLOCKED_ACTION;
 }
 
 int process_pokemon_message(queue_message * message, int from_broker) {
@@ -749,76 +754,75 @@ void exec_thread_function() {
 	}
 }
 
-int is_trainer_waiting(int trainer_id){
-	int _is_trainer_waiting(trainer * a_trainer){
-		return a_trainer->id == trainer_id && a_trainer->stats->status == WAITING_ACTION;
-	}
-
-	return list_any_satisfy(trainers, (void*)_is_trainer_waiting);
+int is_trainer_waiting(trainer * t){
+	return (t->stats->status == WAITING_ACTION);
 }
 
-int get_pokemons_owner(t_list pokemons){
-
-}
-
-trainer * find_allocation_node(t_list * trainer_pokemons_targets, int action_type){
-
-	bool _got_my_pokemon(t_list * a_trainer_pokemons){
-		int i = 0, j;
-		char * tmp_pokemon = list_get(trainer_pokemons_targets, i);
-		char * another_tmp_pokemon;
+int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself){
+	bool _matches_my_pokemons(char * a_pokemon){
+		int i = 0;
+		char * tmp_pokemon = list_get(suspected_trainer->pokemons, i);
 
 		while(tmp_pokemon != NULL){
-			j = 0;
-			another_tmp_pokemon = list_get(a_trainer_pokemons, j);
-			while(another_tmp_pokemon != NULL){
-				if(strmcp(tmp_pokemon, another_tmp_pokemon) == 0){
-					return true;
-				}
-				j++;
-				another_tmp_pokemon = list_get(a_trainer_pokemons, j);
+			if(strcmp(a_pokemon, tmp_pokemon) == 0){
+				return true;
 			}
 			i++;
-			tmp_pokemon = list_get(trainer_pokemons_targets, i);
+			tmp_pokemon = list_get(suspected_trainer->pokemons, i);
 		}
 		return false;
 	}
 
-	bool _allocation_trainer_node(trainer * a_trainer){
-		return a_trainer->stats->status == action_type &&
-				list_find(a_trainer->pokemons, (void*) _got_my_pokemon);
+	return (list_find(myself->targets, (void*) _matches_my_pokemons) != NULL ? true : false);
+}
+
+t_list * find_pokemons_allocators(trainer * myself){
+	t_list * trainers_got_one_of_my_pokemons;
+	trainers_got_one_of_my_pokemons = list_create();
+
+	int i = 0;
+	trainer * a_trainer = list_get(trainers, i);
+
+	while(a_trainer != NULL){
+		if(got_one_of_my_pokemons(a_trainer, myself)){
+			list_add(trainers_got_one_of_my_pokemons, a_trainer);
+		}
+		i++;
+		a_trainer = list_get(trainers, i);
 	}
 
-	return list_find(trainers, (void*) _allocation_trainer_node);
+	return trainers_got_one_of_my_pokemons;
 }
 
-int deadlock_check(trainer * waiting_trainer){
+int circular_chain(t_list * trainers_to_check){
+	int i = 0;
+	trainer * head_trainer = list_get(trainers_to_check, 0);
+	trainer * cycle_trainer = list_get(trainers_to_check, i);
+	trainer * trainer_next_to_me = list_get(trainers_to_check, i+1);
+
+	do{
+		if(!got_one_of_my_pokemons(trainer_next_to_me, cycle_trainer)) return false;
+
+		i++;
+		cycle_trainer = list_get(trainers_to_check, i);
+		trainer_next_to_me = list_get(trainers_to_check, i+1);
+	}while(cycle_trainer->id != head_trainer->id);
+
+	return true;
+}
+
+int is_in_deadlock(trainer * waiting_trainer){
 	//TODO Importante!! Cuando un trainer captura un pokemon, el mismo se saca de la lista de targets
 
+	//if(!is_trainer_waiting(waiting_trainer)) return false;
 
+	t_list * possible_deadlocked_trainers;
+	possible_deadlocked_trainers = list_create();
 
-	trainer * pokemon_owner = find_allocation_node(get_pokemons_owner(waiting_trainer->targets), BLOCKED_ACTION);
+	possible_deadlocked_trainers =	find_pokemons_allocators(waiting_trainer);
 
-	return circular_chain(pokemon_owner, waiting_trainer->id);
+	return circular_chain(possible_deadlocked_trainers);
 }
-
-int circular_chain(trainer * cycle_trainer, int cycle_head_id){
-	if(!is_trainer_waiting(cycle_trainer->id)) return false;
-
-	trainer * pokemon_owner;
-	cycle_trainer = find_allocation_node(cycle_trainer->targets, WAITING_ACTION);
-	pokemon_owner = find_allocation_node(get_pokemon_owner(cycle_trainer->pokemons), BLOCKED_ACTION);
-
-	if(pokemon_owner->id == cycle_head_id) return true;
-
-	return circular_chain(pokemon_owner, cycle_head_id);
-}
-
-
-
-
-
-
 
 
 
