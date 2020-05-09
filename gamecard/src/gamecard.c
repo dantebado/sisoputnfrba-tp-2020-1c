@@ -8,8 +8,11 @@ tall_grass_fs * tall_grass;
 sem_t * file_operation_mutex;
 sem_t * directory_operation_mutex;
 
+int internal_broker_need;
+sem_t * broker_mutex;
+
 //PROTOTYPES
-int process_pokemon_message(queue_message * message, int from_broker);
+int process_pokemon_message(gamecard_thread_payload * payload);
 void setup(int argc, char **argv);
 int broker_server_function();
 int server_function();
@@ -42,29 +45,47 @@ int main(int argc, char **argv) {
 	return EXIT_SUCCESS;
 }
 
-int process_pokemon_message(queue_message * message, int from_broker) {
+int process_pokemon_message(gamecard_thread_payload * payload) {
+	queue_message * message = payload->message;
+	int from_broker = payload->from_broker;
+
+	internal_broker_need = true;
+
 	print_pokemon_message(message);
 	//Message Processing
 	switch(message->header->type) {
 		case NEW_POKEMON:;
 			new_pokemon_message * npm = message->payload;
-			break;
-		case APPEARED_POKEMON:;
-			appeared_pokemon_message * apm = message->payload;
+
+			char * fileContent = tall_grass_read_file("/Pokemon", npm->pokemon);
+			if(fileContent != NULL) {
+
+				pokemon_file * pf = deserialize_pokemon_file(fileContent);
+				find_pokemon_file_line_for_location(pf, npm->x, npm->y)->quantity += npm->count;
+				tall_grass_save_string_in_file("/Pokemon", npm->pokemon, serialize_pokemon_file(pf)->content);
+
+				//TODO Checkear si se guardo el archivo. Sino, quiere decir que otro hilo lo abrió. NO DEBERIA OCURRIR
+
+				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
+				send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
+
+			} else {
+				//TODO Archivo abierto, reintentar
+			}
+
 			break;
 		case CATCH_POKEMON:;
 			catch_pokemon_message * chpm = message->payload;
 			break;
-		case CAUGHT_POKEMON:;
-			caught_pokemon_message * ctpm = message->payload;
-			break;
 		case GET_POKEMON:;
 			get_pokemon_message * gpm = message->payload;
 			break;
-		case LOCALIZED_POKEMON:;
-			localized_pokemon_message * lpm = message->payload;
+		default:
 			break;
 	}
+
+	internal_broker_need = false;
+
 	return success;
 }
 
@@ -88,6 +109,11 @@ void setup(int argc, char **argv) {
 	CONFIG.gamecard_port = config_get_int_value(_CONFIG, "PUERTO_GAMECARD");
 
 	log_info(LOGGER, "Configuration Loaded");
+
+	broker_mutex = malloc(sizeof(sem_t));
+	sem_init(broker_mutex, 0, 1);
+
+	internal_broker_need = false;
 
 	setup_tall_grass();
 
@@ -131,12 +157,22 @@ int broker_server_function() {
 	log_info(LOGGER, "Awaiting message from Broker");
 	while(1) {
 		net_message_header * header = malloc(sizeof(net_message_header));
-		read(CONFIG.broker_socket, header, sizeof(net_message_header));
 
-		queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
-		send_message_acknowledge(message, CONFIG.broker_socket);
+		sem_wait(broker_mutex);
+		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
+		if(!internal_broker_need) {
+			read(CONFIG.broker_socket, header, sizeof(net_message_header));
+			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
+			send_message_acknowledge(message, CONFIG.broker_socket);
 
-		process_pokemon_message(message, 1);
+			gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
+			payload->from_broker = 1;
+			payload->message = message;
+
+			pthread_t the_thread;
+			pthread_create(&the_thread, NULL, process_pokemon_message, payload);
+		}
+		sem_post(broker_mutex);
 	}
 
 	return 0;
@@ -152,7 +188,13 @@ int server_function() {
 		switch(header->type) {
 			case NEW_MESSAGE:;
 				queue_message * message = receive_pokemon_message(fd);
-				process_pokemon_message(message, 0);
+
+				gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
+				payload->from_broker = 0;
+				payload->message = message;
+
+				pthread_t * the_thread;
+				pthread_create(the_thread, NULL, process_pokemon_message, payload);
 				break;
 			default:
 				log_error(LOGGER, "Gamecard received unknown message type %d from external source", header->type);
@@ -343,6 +385,13 @@ int aux_round_up(int int_value, float float_value) {
 	return float_value - int_value > 0 ? int_value + 1 : int_value;
 }
 
+/*
+ * success = 1
+ * already_open = -1
+ * directory_non_existant = -2
+ * non-existant = -3
+ * is_directory = -4
+ * */
 int try_open_file(char * path, char * filename) {
 	sem_wait(file_operation_mutex);
 
@@ -352,7 +401,7 @@ int try_open_file(char * path, char * filename) {
 		log_error(LOGGER, "Cannot open file. Directory doesnt exist");
 
 		sem_post(file_operation_mutex);
-		return false;
+		return -2;
 	}
 
 	char * file_metadata_path = string_duplicate(directory_path);
@@ -365,7 +414,7 @@ int try_open_file(char * path, char * filename) {
 		log_error(LOGGER, "File doesnt exists");
 
 		sem_post(file_operation_mutex);
-		return false;
+		return -3;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
 
@@ -373,7 +422,7 @@ int try_open_file(char * path, char * filename) {
 	if(strcmp(is_directory, "Y") == 0) {
 		log_error(LOGGER, "Cannot close file %s, is a directory", filename);
 		config_destroy(existing_config);
-		return false;
+		return -4;
 	}
 
 	char * is_open = config_get_string_value(existing_config, "OPEN");
@@ -382,7 +431,7 @@ int try_open_file(char * path, char * filename) {
 		config_destroy(existing_config);
 
 		sem_post(file_operation_mutex);
-		return false;
+		return -1;
 	}
 
 	config_set_value(existing_config, "OPEN", "Y");
@@ -390,7 +439,7 @@ int try_open_file(char * path, char * filename) {
 
 	sem_post(file_operation_mutex);
 
-	return true;
+	return 1;
 }
 
 int try_close_file(char * path, char * filename) {
@@ -451,8 +500,14 @@ void * tall_grass_read_file(char * path, char * filename) {
 		return false;
 	}
 
-	if(!try_open_file(path, filename)) {
-		return NULL;
+	int open = try_open_file(path, filename);
+	if(open < 0) {
+		if(open == -3) {
+			tall_grass_save_string_in_file(path, filename, "");
+			try_open_file(path, filename);
+		} else {
+			return NULL;
+		}
 	}
 
 	char * file_metadata_path = string_duplicate(directory_path);
@@ -545,7 +600,7 @@ int tall_grass_save_file(char * path, char * filename, void * payload, int paylo
 	} else {
 		fclose(file_metadata_file);
 
-		if(!try_open_file(path, filename)) {
+		if(try_open_file(path, filename) < 0) {
 			return false;
 		}
 
@@ -703,6 +758,10 @@ pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf) {
 
 pokemon_file * deserialize_pokemon_file(char * contents) {
 	pokemon_file * file = pokemon_file_create();
+
+	if(strcmp("", contents) == 0) {
+		return file;
+	}
 
 	char ** lines = string_split(contents, "\n");
 	int lines_q = count_character_in_string(contents, '\n') + 1;

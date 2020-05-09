@@ -20,7 +20,6 @@ trainer * executing_trainer;
 //SEMAPHORES
 sem_t * executing_mutex;
 sem_t * broker_mutex;
-sem_t * broker_exec_mutex;
 
 pthread_t * exec_thread;
 
@@ -369,6 +368,8 @@ void setup(int argc, char **argv) {
 
 	internal_broker_need = false;
 
+	statistics = malloc(sizeof(team_statistics));
+
 	statistics->context_switch_counter = 0;
 	statistics->global_cpu_counter = 0;
 	statistics->solved_deadlocks = 0;
@@ -385,9 +386,6 @@ void setup(int argc, char **argv) {
 
 	broker_mutex = malloc(sizeof(sem_t));
 	sem_init(broker_mutex, 0, 1);
-
-	broker_exec_mutex = malloc(sizeof(sem_t));
-	sem_init(broker_exec_mutex, 0, 1);
 
 	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");

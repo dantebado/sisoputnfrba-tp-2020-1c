@@ -172,6 +172,11 @@ typedef struct {
  * */
 
 typedef struct {
+	queue_message * message;
+	int from_broker;
+} gamecard_thread_payload;
+
+typedef struct {
 	int length;
 	char * content;
 } pokemon_file_serialized;
