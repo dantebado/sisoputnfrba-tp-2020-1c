@@ -61,6 +61,9 @@ int is_id_in_list(t_list * list, int value);
 
 void print_current_requirements();
 
+t_list * spare_pokemons(trainer * t);
+void compute_deadlocks();
+
 //Main
 int main(int argc, char **argv) {
 	setup(argc, argv);
@@ -138,6 +141,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
 
 									treq->total_caught++;
+
+									compute_deadlocks();
 
 									log_info(LOGGER, "Capture registered successfully");
 									print_current_requirements();
@@ -773,7 +778,7 @@ void exec_thread_function() {
 }
 
 int is_trainer_waiting(trainer * t){
-	return (t->stats->status == WAITING_ACTION);
+	return 1;
 }
 
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself){
@@ -849,10 +854,175 @@ void solve_deadlock_for(trainer * myself){
 	deadlocked_trainers = find_pokemons_allocators(myself);
 
 	block_trainer(myself);
+}
 
+t_list * spare_pokemons(trainer * t) {
+	t_list * list = list_create();
+
+	t_list * computed = list_create();
+
+	t_list * have = t->pokemons;
+	int i, j, k;
+	for(i=0 ; i<have->elements_count ; i++) {
+		int found = 0;
+		char * _h = list_get(have, i);
+		for(j=0 ; j<computed->elements_count ; j++) {
+			pokemon_requirement * _p = list_get(computed, j);
+			if(strcmp(_p->name, _h) == 0) {
+				found = 1;
+				_p->name = string_duplicate(_h);
+				_p->total_caught++;
+			}
+		}
+
+		if(found == 0) {
+			pokemon_requirement * _p = malloc(sizeof(pokemon_requirement));
+			_p->name = string_duplicate(_h);
+			_p->total_caught = 1;
+			list_add(computed, _p);
+		}
+	}
+
+	t_list * targets = t->targets;
+	for(i=0 ; i<targets->elements_count ; i++) {
+		int found = 0;
+		char * _h = list_get(targets, i);
+		for(j=0 ; j<computed->elements_count ; j++) {
+			pokemon_requirement * _p = list_get(computed, j);
+			if(strcmp(_p->name, _h) == 0) {
+				found = 1;
+				_p->total_count++; //Required
+			}
+		}
+
+		if(found == 0) {
+			pokemon_requirement * _p = malloc(sizeof(pokemon_requirement));
+			_p->name = string_duplicate(_h);
+			_p->total_count = 1;
+			_p->total_caught = 0;
+			list_add(computed, _p);
+		}
+	}
+
+	for(j=0 ; j<computed->elements_count ; j++) {
+		pokemon_requirement * _p = list_get(computed, j);
+		if(_p->total_caught > _p->total_count) {
+			trainer_spare_pokemons * _s = malloc(sizeof(trainer_spare_pokemons));
+			_s->pokemon = _p->name;
+			_s->reserved = 0;
+			_s->spare = _p->total_caught - _p->total_count;
+
+			log_info(LOGGER, "%d le sobran %d de %s", t->id, _s->spare, _s->pokemon);
+
+			list_add(list, _s);
+		}
+	}
+
+	return list;
+}
+
+t_list * compute_trainer_needs(trainer * t) {
+	int i, j;
+
+	t_list * computed = list_create();
+
+	for(i=0 ; i<t->targets->elements_count ; i++) {
+		char * target = list_get(t->targets, i);
+
+		int found = 0;
+		for(j=0 ; j<computed->elements_count ; j++) {
+			trainer_spare_pokemons * req = list_get(computed, j);
+			if(strcmp(req->pokemon, target) == 0) {
+				found = 1;
+				req->reserved++;
+			}
+		}
+
+		if(!found) {
+			trainer_spare_pokemons * req = malloc(sizeof(trainer_spare_pokemons));
+			req->pokemon = string_duplicate(target);
+			req->reserved = 1; //I need
+			req->spare = 0; //I have
+			list_add(computed, req);
+		}
+	}
+
+	for(i=0 ; i<t->pokemons->elements_count ; i++) {
+		char * pokemon = list_get(t->pokemons, i);
+
+		int found = 0;
+		for(j=0 ; j<computed->elements_count ; j++) {
+			trainer_spare_pokemons * req = list_get(computed, j);
+			if(strcmp(req->pokemon, pokemon) == 0) {
+				found = 1;
+				req->spare++;
+			}
+		}
+
+		if(!found) {
+			trainer_spare_pokemons * req = malloc(sizeof(trainer_spare_pokemons));
+			req->pokemon = string_duplicate(pokemon);
+			req->reserved = 0; //I need
+			req->spare = 1; //I have
+			list_add(computed, req);
+		}
+	}
+
+	for(i=0 ; i<computed->elements_count ; i++) {
+		trainer_spare_pokemons * req = list_get(computed, i);
+		//log_info(LOGGER, "%d %s tengo %d, necesito %d", t->id, req->pokemon, req->spare, req->reserved);
+	}
+
+	return computed;
+}
+
+t_list * in_need_of_a_spare(t_list * spares, trainer * self) {
+
+	t_list * in_need = list_create();
+
+	int i, j, k;
+	for(i=0 ; i<spares->elements_count ; i++) {
+		trainer_spare_pokemons * tspare = list_get(spares, i);
+
+		for(j=0 ; j<trainers->elements_count ; j++) {
+			trainer * ttrainer = list_get(trainers, j);
+			if(ttrainer->id != self->id) {
+				t_list * needs = compute_trainer_needs(ttrainer);
+
+				for(k=0 ; k<needs->elements_count ; k++) {
+					trainer_spare_pokemons * need = list_get(needs, k);
+
+					if(strcmp(tspare->pokemon, need->pokemon) == 0) {
+
+						if(need->reserved > need->spare) {
+							log_info(LOGGER, "%d necesita %s que le sobra a %d", ttrainer->id, need->pokemon, self->id);
+							list_add(in_need, ttrainer);
+						}
+
+					}
+				}
+
+			}
+		}
+
+	}
+
+	return in_need;
 
 }
 
+void compute_deadlocks() {
 
+	int i, j;
+	for(i=0 ; i<trainers->elements_count ; i++) {
+		trainer * ttrainer = list_get(trainers, i);
+		t_list * tspares = spare_pokemons(ttrainer);
+		t_list * need_my_resource = in_need_of_a_spare(tspares, ttrainer);
+
+
+
+	}
+
+}
 
 

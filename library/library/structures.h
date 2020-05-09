@@ -224,6 +224,12 @@ typedef struct {
  * */
 
 typedef struct {
+	char * pokemon;
+	int spare;
+	int reserved;
+} trainer_spare_pokemons;
+
+typedef struct {
 	char * name;
 	int total_count;
 	int total_caught;
@@ -234,7 +240,6 @@ typedef enum{
 	READY_ACTION,
 	EXEC_ACTION,
 	BLOCKED_ACTION,
-	WAITING_ACTION,
 	EXIT_ACTION
 } trainer_action_status;
 

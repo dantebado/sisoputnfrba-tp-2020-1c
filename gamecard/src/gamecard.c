@@ -373,9 +373,8 @@ t_list * find_free_blocks(int count) {
 	}
 
 	if(allocated < count) {
-		//Alverre
-		return NULL;
 		list_destroy(li);
+		return NULL;
 	}
 
 	return li;
