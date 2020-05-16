@@ -246,13 +246,12 @@ typedef enum{
 typedef enum {
 	CAPTURING,
 	AWAITING_CAPTURE_RESULT,
-	TRADING,
-	SOLVING_DEADLOCK
+	TRADING
 } trainer_activity_type;
 
 typedef struct {
 	trainer_activity_type type;
-	int correlative_id_awaiting; //Que era esto?
+	int correlative_id_awaiting; //El id del mensaje que va a estar esperando del gamecard
 	void * data;
 } trainer_activity ;
 
@@ -313,6 +312,7 @@ typedef struct {
 	int cpu_delay;
 	_planning_alg planning_alg;
 	int quantum;
+	int alpha;
 	char * broker_ip;
 	int broker_port;
 	int initial_estimate;

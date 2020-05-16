@@ -52,6 +52,7 @@ int circular_chain(t_list * trainers_to_check);
 t_list * find_pokemons_allocators(trainer * myself);
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself);
 int is_trainer_waiting(trainer * t);
+void move_to(trainer * t, int x, int y);
 
 //Pokemons
 int is_required(char * pokemon);
@@ -95,9 +96,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 	print_pokemon_message(message);
 	//Message Processing
 	switch(message->header->type) {
-		case NEW_POKEMON:;
-			new_pokemon_message * npm = message->payload;
-			break;
+		//APPEARED, GET, CATCH, LOCALIZED, CAUGHT
+
 		case APPEARED_POKEMON:;
 			//Broker me avisa que aparecio un nuevo pokemon
 			{
@@ -137,6 +137,26 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 								if(ctpm->result) {
 									appeared_pokemon_message * tapm = ttrainer->stats->current_activity->data;
 									list_add(ttrainer->pokemons, tapm->pokemon);
+
+									int _need_that_pokemon(trainer * myself, char * a_pokemon){
+										char * aux_pokemon;
+										for(int n=0; n<myself->targets->elements_count; n++){
+											aux_pokemon = list_get(myself->targets, n);
+											if(strcmp(aux_pokemon, a_pokemon) == 0){
+												return true;
+											}
+										}
+										return false;
+									}
+									if(_need_that_pokemon(ttrainer, tapm->pokemon)){
+										char * tmp_pokemon;
+										for(int n=0; n<ttrainer->targets->elements_count; n++){
+											tmp_pokemon = list_get(ttrainer->targets, n);
+											if(strcmp(tmp_pokemon, tapm->pokemon) == 0){
+												list_remove(ttrainer->targets, n);
+											}
+										}
+									}
 
 									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
 
@@ -183,6 +203,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 					}
 				}
 			}
+			break;
+		default:
 			break;
 	}
 	return 1;
@@ -366,6 +388,7 @@ void setup(int argc, char **argv) {
 		CONFIG.planning_alg = SJF_SD;;
 	}
 	CONFIG.quantum = config_get_int_value(_CONFIG, "QUANTUM");
+	CONFIG.alpha = config_get_int_value(_CONFIG, "ALPHA");
 	CONFIG.broker_ip = config_get_string_value(_CONFIG, "IP_BROKER");
 	CONFIG.broker_port = config_get_int_value(_CONFIG, "PUERTO_BROKER");
 	CONFIG.team_port = config_get_int_value(_CONFIG, "PUERTO_TEAM");
@@ -472,6 +495,23 @@ void setup(int argc, char **argv) {
 				list_add(t->targets, string_get_string_as_array(this_targets)[i]);
 			}
 
+			void _diff_my_caught_pokemons(trainer * ttrainer){
+				char * tmp_pokemon;
+				char * another_tmp_pokemon;
+
+				for(int i=0; i<ttrainer->targets->elements_count; i++){
+					tmp_pokemon = list_get(ttrainer->targets, i);
+					for(int j=0; j<ttrainer->pokemons->elements_count; i++){
+						another_tmp_pokemon = list_get(ttrainer->pokemons, j);
+						if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0){
+							list_remove(ttrainer->pokemons, j);
+						}
+					}
+				}
+			}
+
+			_diff_my_caught_pokemons(t);
+
 			t->stats = malloc(sizeof(trainer_action));
 			t->stats->estimation = CONFIG.initial_estimate;
 			t->stats->last_estimation = 0;
@@ -529,13 +569,13 @@ void print_current_requirements() {
 }
 
 float estimate(trainer*t){
-	float alpha = 0.5; //Le damos igual importancia a rafagas cortas como largas
+	float alpha = CONFIG.alpha; //Alpha dado por archivo de configuracion
 
 	//estimacion proxima = estimacion anterior * (1-alfa) + real anterior * alfa
 	float estimation = (t->stats->last_estimation) * (1 - alpha) + (t->stats->last_job_counter) * alpha;
 
 	//float estimation = (alpha/100)*(t->quantum_counter) + (1-(alpha/100))*(t->last_estimation);
-	t->stats->quantum_counter = 0;
+	//t->stats->quantum_counter = 0;
 	log_info(LOGGER, "New estimation: %f", estimation);
 
 	return estimation;
@@ -586,8 +626,8 @@ void sort_queues(){
 }
 
 int is_trainer_completed(trainer * t) {
-	//TODO computar los requiremientos de cada trainer, pero no sabemos si debe tener en cuenta los que tiene al comienzo
-	return false;
+	//TODO Hay que eliminar el target pokemon cuando el trainer hace el trade
+	return (list_is_empty(t->targets));
 }
 
 int is_globally_completed() {
@@ -603,6 +643,30 @@ int is_globally_completed() {
 
 int location_are_the_same(location * l1, location * l2) {
 	return (l1->x == l2->x && l1->y == l2->y);
+}
+
+void move_to(trainer * t, int x, int y){
+	if(location_are_the_same(location_create(x, y), location_create(t->x, t->y))) {
+		log_info(LOGGER, "\tIs already there");
+	} else {
+		while(!location_are_the_same(location_create(x, y), location_create(t->x, t->y))){
+			log_info(LOGGER, "\tIs moving");
+			if(t->x != x) {
+				if(t->x < x) {
+					t->x++;
+				} else {
+					t->x--;
+				}
+			} else {
+				if(t->y < y) {
+					t->y++;
+				} else {
+					t->y--;
+				}
+			}
+		log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
+		}
+	}
 }
 
 void executing(trainer * t){
@@ -626,10 +690,6 @@ void executing(trainer * t){
 			if(CONFIG.quantum == t->stats->quantum_counter) {
 				quantum_ended = true;
 			}
-		}else if(CONFIG.planning_alg == FIFO_PLANNING ||
-				CONFIG.planning_alg == SJF_SD ||
-				CONFIG.planning_alg == SJF_CD){
-			sort_queues();
 		}
 
 		switch(t->stats->current_activity->type) {
@@ -640,78 +700,62 @@ void executing(trainer * t){
 					log_info(LOGGER, "\tIs capturing pokemon %s at %d %d",
 							apm->pokemon, apm->x, apm->y);
 
-					if(location_are_the_same(location_create(apm->x, apm->y), location_create(t->x, t->y))) {
+					move_to(t, apm->x, apm->y);
 
-						queue_message * msg = catch_pokemon_create(apm->pokemon, apm->x, apm->y);
+					queue_message * msg = catch_pokemon_create(apm->pokemon, apm->x, apm->y);
 
-						internal_broker_need = true;
-							log_info(LOGGER, "\tIs already there, sending catch msg");
-							send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
-						internal_broker_need = false;
+					internal_broker_need = true;
+						log_info(LOGGER, "\tIs already there, sending catch msg");
+						send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+					internal_broker_need = false;
 
-						t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
+					t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
 
-						log_info(LOGGER, "\t\tCatch msg sent with ID %d", t->stats->current_activity->correlative_id_awaiting);
-						t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
+					log_info(LOGGER, "\t\tCatch msg sent with ID %d", t->stats->current_activity->correlative_id_awaiting);
+					t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
 
-						t->stats->status = BLOCKED_ACTION;
-						executing_trainer = NULL;
-					} else {
-						log_info(LOGGER, "\tIs moving");
-						if(t->x != apm->x) {
-							if(t->x < apm->x) {
-								t->x++;
-							} else {
-								t->x--;
-							}
-						} else {
-							if(t->y < apm->y) {
-								t->y++;
-							} else {
-								t->y--;
-							}
-						}
-						log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
-					}
+					t->stats->status = BLOCKED_ACTION;
+					executing_trainer = NULL;
 				}
 				break;
 			case AWAITING_CAPTURE_RESULT:
 				break;
-			case TRADING:
-				//TODO: trading
-				break;
-			case SOLVING_DEADLOCK:
-				log_info(LOGGER, "\tIs solving deadlock");
+			case TRADING: ;
+				trainer * trading_trainer = t->stats->current_activity->data;
+				log_info(LOGGER, "\tIs trading with %d at %d %d",
+											trading_trainer->id, trading_trainer->x, trading_trainer->y);
 
-				//Como te enteras de la posicion del entrenador bloqueado??
+				move_to(t, trading_trainer->x, trading_trainer->y);
 
-				/*
-				if(location_are_the_same(location_create(apm->x, apm->y), location_create(t->x, t->y))) {
-
-					log_info(LOGGER, "\tIs already there, now trading");
-
-					t->stats->current_activity->type = TRADING;
-
-					t->stats->status = BLOCKED_ACTION;
-					executing_trainer = NULL;
-				} else {
-					log_info(LOGGER, "\tIs moving");
-					if(t->x != apm->x) {
-						if(t->x < apm->x) {
-							t->x++;
-						} else {
-							t->x--;
-						}
-					} else {
-						if(t->y < apm->y) {
-							t->y++;
-						} else {
-							t->y--;
+				int _need_that_pokemon(trainer * myself, char * a_pokemon){
+					char * aux_pokemon;
+					for(int n=0; n<myself->targets->elements_count; n++){
+						aux_pokemon = list_get(myself->targets, n);
+						if(strcmp(aux_pokemon, a_pokemon) == 0){
+							return true;
 						}
 					}
-					log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
+					return false;
 				}
-				*/
+
+				void _trade(trainer * self, trainer * friend){
+					char * tmp_pokemon;
+					char * another_tmp_pokemon;
+
+					for(int i=0; i<self->pokemons->elements_count; i++){
+						tmp_pokemon = list_get(self->pokemons, i);
+						for(int j=0; j<friend->targets->elements_count; j++){
+							another_tmp_pokemon = list_get(friend->targets, j);
+							if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0 &&
+									!_need_that_pokemon(self, tmp_pokemon)){
+								list_remove(friend->targets, j);
+								list_add(friend->pokemons, another_tmp_pokemon);
+								list_remove(self->pokemons, i);
+							}
+						}
+					}
+				}
+				_trade(t, trading_trainer);
 
 				break;
 		}
@@ -836,6 +880,7 @@ int circular_chain(t_list * trainers_to_check){
 
 int is_in_deadlock(trainer * waiting_trainer){
 	//TODO Importante!! Cuando un trainer captura un pokemon, el mismo se saca de la lista de targets
+	//Hecho
 
 	//if(!is_trainer_waiting(waiting_trainer)) return false;
 
@@ -862,6 +907,7 @@ t_list * spare_pokemons(trainer * t) {
 	t_list * computed = list_create();
 
 	t_list * have = t->pokemons;
+
 	int i, j, k;
 	for(i=0 ; i<have->elements_count ; i++) {
 		int found = 0;
