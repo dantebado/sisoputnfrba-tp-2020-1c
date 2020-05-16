@@ -32,6 +32,7 @@ team_statistics * statistics;
 //PROTOTYPES
 //Connections
 void setup(int argc, char **argv);
+void _diff_my_caught_pokemons(trainer * ttrainer);
 int broker_server_function();
 int server_function();
 
@@ -51,7 +52,6 @@ int is_in_deadlock(trainer * waiting_trainer);
 int circular_chain(t_list * trainers_to_check);
 t_list * find_pokemons_allocators(trainer * myself);
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself);
-int is_trainer_waiting(trainer * t);
 bool move_to(trainer * t, int x, int y);
 
 //Pokemons
@@ -61,9 +61,9 @@ void set_required_pokemons();
 int is_id_in_list(t_list * list, int value);
 
 void print_current_requirements();
-
-t_list * spare_pokemons(trainer * t);
 void compute_deadlocks();
+
+bool exists_path_to(trainer * from, trainer * to);
 
 //Main
 int main(int argc, char **argv) {
@@ -138,28 +138,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 									appeared_pokemon_message * tapm = ttrainer->stats->current_activity->data;
 									list_add(ttrainer->pokemons, tapm->pokemon);
 
-									int _need_that_pokemon(trainer * myself, char * a_pokemon){
-										char * aux_pokemon;
-										for(int n=0; n<myself->targets->elements_count; n++){
-											aux_pokemon = list_get(myself->targets, n);
-											if(strcmp(aux_pokemon, a_pokemon) == 0){
-												return true;
-											}
-										}
-										return false;
-									}
-									if(_need_that_pokemon(ttrainer, tapm->pokemon)){
-										char * tmp_pokemon;
-										for(int n=0; n<ttrainer->targets->elements_count; n++){
-											tmp_pokemon = list_get(ttrainer->targets, n);
-											if(strcmp(tmp_pokemon, tapm->pokemon) == 0){
-												list_remove(ttrainer->targets, n);
-											}
-										}
-									}
-
+									_diff_my_caught_pokemons(ttrainer);
 									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
-
 									treq->total_caught++;
 
 									log_info(LOGGER, "Capture registered successfully");
@@ -480,6 +460,7 @@ void setup(int argc, char **argv) {
 
 			char * this_targets = string_split(targets+1, "]")[aux_counter];
 			char * original_targets = this_targets;
+
 			string_append(&this_targets, "]");
 			if(this_targets[0] == ',') this_targets++;
 			while(this_targets[0] == ' ') {
@@ -490,24 +471,10 @@ void setup(int argc, char **argv) {
 				if(this_targets[i] == ',') count_targets++;
 			}
 			if(strlen(this_targets) == 2) count_targets--;
+
 			t->targets = list_create();
 			for(i=0 ; i<count_targets ; i++){
 				list_add(t->targets, string_get_string_as_array(this_targets)[i]);
-			}
-
-			void _diff_my_caught_pokemons(trainer * ttrainer){
-				char * tmp_pokemon;
-				char * another_tmp_pokemon;
-
-				for(int i=0; i<ttrainer->targets->elements_count; i++){
-					tmp_pokemon = list_get(ttrainer->targets, i);
-					for(int j=0; j<ttrainer->pokemons->elements_count; i++){
-						another_tmp_pokemon = list_get(ttrainer->pokemons, j);
-						if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0){
-							list_remove(ttrainer->pokemons, j);
-						}
-					}
-				}
 			}
 
 			_diff_my_caught_pokemons(t);
@@ -536,6 +503,9 @@ void setup(int argc, char **argv) {
 		}
 	}
 
+	log_info(LOGGER, "asdasd");
+	log_info(LOGGER, "%d", exists_path_to( list_get(trainers, 3), list_get(trainers, 2) ));
+
 	executing_mutex = malloc(sizeof(sem_t));
 	sem_init(executing_mutex, 0, 1);
 
@@ -546,7 +516,7 @@ void setup(int argc, char **argv) {
 	print_current_requirements();
 
 	//CREAMOS SOCKET DE ESCUCHA CON EL BROKER
-	CONFIG.broker_socket = create_socket();
+	/*CONFIG.broker_socket = create_socket();
 	connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port);
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, CONFIG.broker_socket);
 
@@ -555,7 +525,24 @@ void setup(int argc, char **argv) {
 	pthread_join(exec_thread, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);
+	pthread_join(CONFIG.broker_thread, NULL);*/
+}
+
+void _diff_my_caught_pokemons(trainer * ttrainer){
+	char * tmp_pokemon;
+	char * another_tmp_pokemon;
+
+	for(int i=0; i<ttrainer->targets->elements_count; i++){
+		tmp_pokemon = list_get(ttrainer->targets, i);
+		for(int j=0; j<ttrainer->pokemons->elements_count; j++){
+			another_tmp_pokemon = list_get(ttrainer->pokemons, j);
+			if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0){
+				list_remove(ttrainer->pokemons, j);
+				list_remove(ttrainer->targets, i);
+				j = ttrainer->pokemons->elements_count + 1;
+			}
+		}
+	}
 }
 
 void print_current_requirements() {
@@ -626,7 +613,6 @@ void sort_queues(){
 }
 
 int is_trainer_completed(trainer * t) {
-	//TODO Hay que eliminar el target pokemon cuando el trainer hace el trade
 	return (list_is_empty(t->targets));
 }
 
@@ -650,23 +636,21 @@ bool move_to(trainer * t, int x, int y){
 		log_info(LOGGER, "\tIs already there");
 		return true;
 	} else {
-		while(!location_are_the_same(location_create(x, y), location_create(t->x, t->y))){
-			log_info(LOGGER, "\tIs moving");
-			if(t->x != x) {
-				if(t->x < x) {
-					t->x++;
-				} else {
-					t->x--;
-				}
+		log_info(LOGGER, "\tIs moving");
+		if(t->x != x) {
+			if(t->x < x) {
+				t->x++;
 			} else {
-				if(t->y < y) {
-					t->y++;
-				} else {
-					t->y--;
-				}
+				t->x--;
 			}
-		log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
+		} else {
+			if(t->y < y) {
+				t->y++;
+			} else {
+				t->y--;
+			}
 		}
+		log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
 	}
 	return false;
 }
@@ -727,37 +711,36 @@ void executing(trainer * t){
 				log_info(LOGGER, "\tIs trading with %d at %d %d",
 											trading_trainer->id, trading_trainer->x, trading_trainer->y);
 
-				move_to(t, trading_trainer->x, trading_trainer->y);
-
-				int _need_that_pokemon(trainer * myself, char * a_pokemon){
-					char * aux_pokemon;
-					for(int n=0; n<myself->targets->elements_count; n++){
-						aux_pokemon = list_get(myself->targets, n);
-						if(strcmp(aux_pokemon, a_pokemon) == 0){
-							return true;
+				if(move_to(t, trading_trainer->x, trading_trainer->y)) {
+					int _need_that_pokemon(trainer * myself, char * a_pokemon){
+						char * aux_pokemon;
+						for(int n=0; n<myself->targets->elements_count; n++){
+							aux_pokemon = list_get(myself->targets, n);
+							if(strcmp(aux_pokemon, a_pokemon) == 0){
+								return true;
+							}
 						}
+						return false;
 					}
-					return false;
-				}
 
-				void _trade(trainer * self, trainer * friend){
-					char * tmp_pokemon;
-					char * another_tmp_pokemon;
+					void _trade(trainer * self, trainer * friend){
+						char * tmp_pokemon;
+						char * another_tmp_pokemon;
 
-					for(int i=0; i<self->pokemons->elements_count; i++){
-						tmp_pokemon = list_get(self->pokemons, i);
-						for(int j=0; j<friend->targets->elements_count; j++){
-							another_tmp_pokemon = list_get(friend->targets, j);
-							if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0 &&
-									!_need_that_pokemon(self, tmp_pokemon)){
-								list_remove(friend->targets, j);
-								list_add(friend->pokemons, another_tmp_pokemon);
-								list_remove(self->pokemons, i);
+						for(int i=0; i<self->pokemons->elements_count; i++){
+							tmp_pokemon = list_get(self->pokemons, i);
+							for(int j=0; j<friend->targets->elements_count; j++){
+								another_tmp_pokemon = list_get(friend->targets, j);
+								if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0 &&
+										!_need_that_pokemon(self, tmp_pokemon)){
+									list_remove(friend->targets, j);
+									list_remove(self->pokemons, i);
+								}
 							}
 						}
 					}
+					_trade(t, trading_trainer);
 				}
-				_trade(t, trading_trainer);
 
 				break;
 		}
@@ -823,10 +806,6 @@ void exec_thread_function() {
 	}
 }
 
-int is_trainer_waiting(trainer * t){
-	return 1;
-}
-
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself){
 	bool _matches_my_pokemons(char * a_pokemon){
 		int i = 0;
@@ -853,8 +832,10 @@ t_list * find_pokemons_allocators(trainer * myself){
 	trainer * a_trainer = list_get(trainers, i);
 
 	while(a_trainer != NULL){
-		if(got_one_of_my_pokemons(a_trainer, myself)){
-			list_add(trainers_got_one_of_my_pokemons, a_trainer);
+		if(a_trainer->id != myself->id) {
+			if(got_one_of_my_pokemons(a_trainer, myself)){
+				list_add(trainers_got_one_of_my_pokemons, a_trainer);
+			}
 		}
 		i++;
 		a_trainer = list_get(trainers, i);
@@ -884,8 +865,6 @@ int is_in_deadlock(trainer * waiting_trainer){
 	//TODO Importante!! Cuando un trainer captura un pokemon, el mismo se saca de la lista de targets
 	//Hecho
 
-	//if(!is_trainer_waiting(waiting_trainer)) return false;
-
 	t_list * possible_deadlocked_trainers;
 	possible_deadlocked_trainers = list_create();
 
@@ -903,160 +882,42 @@ void solve_deadlock_for(trainer * myself){
 	block_trainer(myself);
 }
 
-t_list * spare_pokemons(trainer * t) {
-	t_list * list = list_create();
-
-	t_list * computed = list_create();
-
-	t_list * have = t->pokemons;
-
-	int i, j, k;
-	for(i=0 ; i<have->elements_count ; i++) {
-		int found = 0;
-		char * _h = list_get(have, i);
-		for(j=0 ; j<computed->elements_count ; j++) {
-			pokemon_requirement * _p = list_get(computed, j);
-			if(strcmp(_p->name, _h) == 0) {
-				found = 1;
-				_p->name = string_duplicate(_h);
-				_p->total_caught++;
-			}
-		}
-
-		if(found == 0) {
-			pokemon_requirement * _p = malloc(sizeof(pokemon_requirement));
-			_p->name = string_duplicate(_h);
-			_p->total_caught = 1;
-			list_add(computed, _p);
+bool exists_path_to(trainer * from, trainer * to) {
+	int i, j;
+	t_list * allocations = find_pokemons_allocators(from);
+	bool any_is = false;
+	for(i=0 ; i<allocations->elements_count ; i++) {
+		trainer * t = list_get(allocations, i);
+		if(t->id == to->id) {
+			any_is = true;
+			return true;
+		} else {
+			any_is = any_is | exists_path_to(t, to);
 		}
 	}
-
-	t_list * targets = t->targets;
-	for(i=0 ; i<targets->elements_count ; i++) {
-		int found = 0;
-		char * _h = list_get(targets, i);
-		for(j=0 ; j<computed->elements_count ; j++) {
-			pokemon_requirement * _p = list_get(computed, j);
-			if(strcmp(_p->name, _h) == 0) {
-				found = 1;
-				_p->total_count++; //Required
-			}
-		}
-
-		if(found == 0) {
-			pokemon_requirement * _p = malloc(sizeof(pokemon_requirement));
-			_p->name = string_duplicate(_h);
-			_p->total_count = 1;
-			_p->total_caught = 0;
-			list_add(computed, _p);
-		}
-	}
-
-	for(j=0 ; j<computed->elements_count ; j++) {
-		pokemon_requirement * _p = list_get(computed, j);
-		if(_p->total_caught > _p->total_count) {
-			trainer_spare_pokemons * _s = malloc(sizeof(trainer_spare_pokemons));
-			_s->pokemon = _p->name;
-			_s->reserved = 0;
-			_s->spare = _p->total_caught - _p->total_count;
-
-			log_info(LOGGER, "%d le sobran %d de %s", t->id, _s->spare, _s->pokemon);
-
-			list_add(list, _s);
-		}
-	}
-
-	return list;
+	return any_is;
 }
 
-t_list * compute_trainer_needs(trainer * t) {
+void compute_path_to(trainer * start, trainer * target, t_list * paths, t_list * tpath) {
 	int i, j;
 
-	t_list * computed = list_create();
+	t_list * nodes = find_pokemons_allocators(start);
 
-	for(i=0 ; i<t->targets->elements_count ; i++) {
-		char * target = list_get(t->targets, i);
+	if(nodes->elements_count == 0) {
 
-		int found = 0;
-		for(j=0 ; j<computed->elements_count ; j++) {
-			trainer_spare_pokemons * req = list_get(computed, j);
-			if(strcmp(req->pokemon, target) == 0) {
-				found = 1;
-				req->reserved++;
+	} else {
+		for(i=0 ; i<nodes->elements_count ; i++) {
+			trainer * ttrainer = list_get(nodes, i);
+
+			if(ttrainer->id == target->id) {
+				list_add(tpath, ttrainer);
+			} else {
+				t_list * new_path = list_create();
+				list_add(paths, new_path);
+				compute_path_to(start, ttrainer, paths, new_path);
 			}
 		}
-
-		if(!found) {
-			trainer_spare_pokemons * req = malloc(sizeof(trainer_spare_pokemons));
-			req->pokemon = string_duplicate(target);
-			req->reserved = 1; //I need
-			req->spare = 0; //I have
-			list_add(computed, req);
-		}
 	}
-
-	for(i=0 ; i<t->pokemons->elements_count ; i++) {
-		char * pokemon = list_get(t->pokemons, i);
-
-		int found = 0;
-		for(j=0 ; j<computed->elements_count ; j++) {
-			trainer_spare_pokemons * req = list_get(computed, j);
-			if(strcmp(req->pokemon, pokemon) == 0) {
-				found = 1;
-				req->spare++;
-			}
-		}
-
-		if(!found) {
-			trainer_spare_pokemons * req = malloc(sizeof(trainer_spare_pokemons));
-			req->pokemon = string_duplicate(pokemon);
-			req->reserved = 0; //I need
-			req->spare = 1; //I have
-			list_add(computed, req);
-		}
-	}
-
-	for(i=0 ; i<computed->elements_count ; i++) {
-		trainer_spare_pokemons * req = list_get(computed, i);
-		//log_info(LOGGER, "%d %s tengo %d, necesito %d", t->id, req->pokemon, req->spare, req->reserved);
-	}
-
-	return computed;
-}
-
-t_list * in_need_of_a_spare(t_list * spares, trainer * self) {
-
-	t_list * in_need = list_create();
-
-	int i, j, k;
-	for(i=0 ; i<spares->elements_count ; i++) {
-		trainer_spare_pokemons * tspare = list_get(spares, i);
-
-		for(j=0 ; j<trainers->elements_count ; j++) {
-			trainer * ttrainer = list_get(trainers, j);
-			if(ttrainer->id != self->id) {
-				t_list * needs = compute_trainer_needs(ttrainer);
-
-				for(k=0 ; k<needs->elements_count ; k++) {
-					trainer_spare_pokemons * need = list_get(needs, k);
-
-					if(strcmp(tspare->pokemon, need->pokemon) == 0) {
-
-						if(need->reserved > need->spare) {
-							log_info(LOGGER, "%d necesita %s que le sobra a %d", ttrainer->id, need->pokemon, self->id);
-							list_add(in_need, ttrainer);
-						}
-
-					}
-				}
-
-			}
-		}
-
-	}
-
-	return in_need;
-
 }
 
 void compute_deadlocks() {
@@ -1064,11 +925,18 @@ void compute_deadlocks() {
 	int i, j;
 	for(i=0 ; i<trainers->elements_count ; i++) {
 		trainer * ttrainer = list_get(trainers, i);
-		t_list * tspares = spare_pokemons(ttrainer);
-		t_list * need_my_resource = in_need_of_a_spare(tspares, ttrainer);
+		//t_list * tspares = spare_pokemons(ttrainer);
+		//t_list * need_my_resource = in_need_of_a_spare(tspares, ttrainer);
 
+		trainer * color = ttrainer;
 
+		t_list * root_nodes;
+		root_nodes = find_pokemons_allocators(ttrainer);
 
+		for(j=0 ; j<root_nodes->elements_count ; j++) {
+			trainer * root_trainer = list_get(root_nodes, j);
+			t_list * my_allocators = find_pokemons_allocators(root_trainer);
+		}
 	}
 
 }
