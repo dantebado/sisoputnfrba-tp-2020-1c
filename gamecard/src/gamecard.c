@@ -27,7 +27,7 @@ t_list * find_free_blocks(int count);
 int aux_round_up(int int_value, float float_value);
 int try_open_file(char * path, char * filename);
 int try_close_file(char * path, char * filename);
-void * tall_grass_read_file(char * path, char * filename);
+void * tall_grass_read_file(char * path, char * filename, bool pre_opened);
 int tall_grass_save_file(char * path, char * filename, void * payload, int payload_size);
 int tall_grass_save_string_in_file(char * path, char * filename, char * content);
 pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf);
@@ -57,7 +57,7 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 		case NEW_POKEMON:;
 			new_pokemon_message * npm = message->payload;
 
-			char * fileContent = tall_grass_read_file("/Pokemon", npm->pokemon);
+			char * fileContent = tall_grass_read_file("/Pokemon", npm->pokemon, false);
 			if(fileContent != NULL) {
 
 				pokemon_file * pf = deserialize_pokemon_file(fileContent);
@@ -68,6 +68,7 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 
 				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
 				send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
+				log_info(LOGGER, "Saved new pokemon location");
 
 			} else {
 				//TODO Archivo abierto, reintentar
@@ -76,6 +77,48 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 			break;
 		case CATCH_POKEMON:;
 			catch_pokemon_message * chpm = message->payload;
+
+			log_info(LOGGER, "Attempt to catch pokemon %s at [%d::%d]", chpm->pokemon, chpm->x, chpm->y);
+
+			/*
+			 * success = 1
+			 * already_open = -1
+			 * directory_non_existant = -2
+			 * non-existant = -3
+			 * is_directory = -4
+			 * */
+			int open_result = try_open_file("/Pokemon", chpm->pokemon);
+			switch(open_result) {
+				case 1: ;
+					char * fileContent = tall_grass_read_file("/Pokemon", chpm->pokemon, true);
+					if(fileContent != NULL) {
+						pokemon_file * pf = deserialize_pokemon_file(fileContent);
+						pokemon_file_line * line = find_pokemon_file_line_for_location(pf, chpm->x, chpm->y);
+
+						if(line->quantity == 0) {
+							queue_message * response = caught_pokemon_create(0);
+							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+							log_info(LOGGER, "Pokemon caught failed");
+						} else {
+							line->quantity--;
+							tall_grass_save_string_in_file("/Pokemon", chpm->pokemon, serialize_pokemon_file(pf)->content);
+
+							queue_message * response = caught_pokemon_create(1);
+							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+							log_info(LOGGER, "Pokemon caught successfully");
+						}
+					}
+					break;
+				case -1:
+					log_info(LOGGER, "File is already open. Retrying");
+					break;
+				default:
+					log_error(LOGGER, "File does not exists or is a directory");
+					queue_message * response = caught_pokemon_create(0);
+					send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+					break;
+			}
+
 			break;
 		case GET_POKEMON:;
 			get_pokemon_message * gpm = message->payload;
@@ -491,7 +534,7 @@ int try_close_file(char * path, char * filename) {
 	return true;
 }
 
-void * tall_grass_read_file(char * path, char * filename) {
+void * tall_grass_read_file(char * path, char * filename, bool pre_opened) {
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
@@ -499,13 +542,15 @@ void * tall_grass_read_file(char * path, char * filename) {
 		return false;
 	}
 
-	int open = try_open_file(path, filename);
-	if(open < 0) {
-		if(open == -3) {
-			tall_grass_save_string_in_file(path, filename, "");
-			try_open_file(path, filename);
-		} else {
-			return NULL;
+	if(!pre_opened) {
+		int open = try_open_file(path, filename);
+		if(open < 0) {
+			if(open == -3) {
+				tall_grass_save_string_in_file(path, filename, "");
+				try_open_file(path, filename);
+			} else {
+				return NULL;
+			}
 		}
 	}
 

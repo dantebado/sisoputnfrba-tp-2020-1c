@@ -52,7 +52,7 @@ int circular_chain(t_list * trainers_to_check);
 t_list * find_pokemons_allocators(trainer * myself);
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself);
 int is_trainer_waiting(trainer * t);
-void move_to(trainer * t, int x, int y);
+bool move_to(trainer * t, int x, int y);
 
 //Pokemons
 int is_required(char * pokemon);
@@ -162,10 +162,10 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 
 									treq->total_caught++;
 
-									compute_deadlocks();
-
 									log_info(LOGGER, "Capture registered successfully");
 									print_current_requirements();
+
+									compute_deadlocks();
 								}
 
 								ttrainer->stats->status = BLOCKED_ACTION;
@@ -645,9 +645,10 @@ int location_are_the_same(location * l1, location * l2) {
 	return (l1->x == l2->x && l1->y == l2->y);
 }
 
-void move_to(trainer * t, int x, int y){
+bool move_to(trainer * t, int x, int y){
 	if(location_are_the_same(location_create(x, y), location_create(t->x, t->y))) {
 		log_info(LOGGER, "\tIs already there");
+		return true;
 	} else {
 		while(!location_are_the_same(location_create(x, y), location_create(t->x, t->y))){
 			log_info(LOGGER, "\tIs moving");
@@ -667,6 +668,7 @@ void move_to(trainer * t, int x, int y){
 		log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
 		}
 	}
+	return false;
 }
 
 void executing(trainer * t){
@@ -700,22 +702,22 @@ void executing(trainer * t){
 					log_info(LOGGER, "\tIs capturing pokemon %s at %d %d",
 							apm->pokemon, apm->x, apm->y);
 
-					move_to(t, apm->x, apm->y);
+					if(move_to(t, apm->x, apm->y)) {
+						queue_message * msg = catch_pokemon_create(apm->pokemon, apm->x, apm->y);
 
-					queue_message * msg = catch_pokemon_create(apm->pokemon, apm->x, apm->y);
+						internal_broker_need = true;
+							log_info(LOGGER, "\tIs already there, sending catch msg");
+							send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+						internal_broker_need = false;
 
-					internal_broker_need = true;
-						log_info(LOGGER, "\tIs already there, sending catch msg");
-						send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
-					internal_broker_need = false;
+						t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
 
-					t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
+						log_info(LOGGER, "\t\tCatch msg sent with ID %d", t->stats->current_activity->correlative_id_awaiting);
+						t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
 
-					log_info(LOGGER, "\t\tCatch msg sent with ID %d", t->stats->current_activity->correlative_id_awaiting);
-					t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
-
-					t->stats->status = BLOCKED_ACTION;
-					executing_trainer = NULL;
+						t->stats->status = BLOCKED_ACTION;
+						executing_trainer = NULL;
+					}
 				}
 				break;
 			case AWAITING_CAPTURE_RESULT:
