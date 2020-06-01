@@ -52,6 +52,7 @@ int is_in_deadlock(trainer * waiting_trainer);
 int circular_chain(t_list * trainers_to_check);
 t_list * find_pokemons_allocators(trainer * myself);
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself);
+int need_that_pokemon(trainer * myself, char * suspected_pokemon);
 bool move_to(trainer * t, int x, int y);
 
 //Pokemons
@@ -558,10 +559,10 @@ float estimate(trainer*t){
 
 	//float estimation = (alpha/100)*(t->quantum_counter) + (1-(alpha/100))*(t->last_estimation);
 	//t->stats->quantum_counter = 0;
-	log_info(LOGGER, "New estimation: %f", estimation);
+	log_info(LOGGER, "Trainer %d now has new estimation: %f", t->stats->estimation, estimation);
 
 	return estimation;
-}
+}//TODO cuando se modifica la estimacion??
 
 void sort_by_burst(){
 	//CASO DE SOLAMENTE DOS ENTRENADORES
@@ -650,6 +651,14 @@ bool move_to(trainer * t, int x, int y){
 	return false;
 }
 
+int need_that_pokemon(trainer * myself, char * suspected_pokemon){
+	for(int i=0; i<myself->targets->elements_count; i++){
+		if(strcmp(list_get(myself->targets, i), suspected_pokemon) == 0) return true;
+	}
+
+	return false;
+}
+
 void executing(trainer * t){
 	//Es el entrenador ejecutando acciones
 	log_info(LOGGER, "Init thread, trainer %d", t->id);
@@ -699,7 +708,9 @@ void executing(trainer * t){
 					}
 				}
 				break;
-			case AWAITING_CAPTURE_RESULT:
+			case AWAITING_CAPTURE_RESULT: ;
+				//Aca el entrenador espera recibir el mensaje del catch que envio
+				//Luego si el resultado es positivo, se computan los deadlocks
 				break;
 			case TRADING: ;
 				trainer * trading_trainer = t->stats->current_activity->data;
@@ -707,17 +718,6 @@ void executing(trainer * t){
 											trading_trainer->id, trading_trainer->x, trading_trainer->y);
 
 				if(move_to(t, trading_trainer->x, trading_trainer->y)) {
-					int _need_that_pokemon(trainer * myself, char * a_pokemon){
-						char * aux_pokemon;
-						for(int n=0; n<myself->targets->elements_count; n++){
-							aux_pokemon = list_get(myself->targets, n);
-							if(strcmp(aux_pokemon, a_pokemon) == 0){
-								return true;
-							}
-						}
-						return false;
-					}
-
 					void _trade(trainer * self, trainer * friend){
 						char * tmp_pokemon;
 						char * another_tmp_pokemon;
@@ -727,7 +727,7 @@ void executing(trainer * t){
 							for(int j=0; j<friend->targets->elements_count; j++){
 								another_tmp_pokemon = list_get(friend->targets, j);
 								if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0 &&
-										!_need_that_pokemon(self, tmp_pokemon)){
+										!need_that_pokemon(self, tmp_pokemon)){
 									list_remove(friend->targets, j);
 									list_remove(self->pokemons, i);
 								}
@@ -807,7 +807,8 @@ int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself){
 		char * tmp_pokemon = list_get(suspected_trainer->pokemons, i);
 
 		while(tmp_pokemon != NULL){
-			if(strcmp(a_pokemon, tmp_pokemon) == 0){
+			if(strcmp(a_pokemon, tmp_pokemon) == 0 && !need_that_pokemon(suspected_trainer, tmp_pokemon)){
+				//Es el pokemon que necesito yo "Y" el otro entrenador no lo necesita
 				return true;
 			}
 			i++;
@@ -820,8 +821,7 @@ int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself){
 }
 
 t_list * find_pokemons_allocators(trainer * myself){
-	t_list * trainers_got_one_of_my_pokemons;
-	trainers_got_one_of_my_pokemons = list_create();
+	t_list * trainers_got_one_of_my_pokemons = list_create();
 
 	int i = 0;
 	trainer * a_trainer = list_get(trainers, i);
@@ -856,10 +856,8 @@ int circular_chain(t_list * trainers_to_check){
 	return true;
 }
 
+//NO VA
 int is_in_deadlock(trainer * waiting_trainer){
-	//TODO Importante!! Cuando un trainer captura un pokemon, el mismo se saca de la lista de targets
-	//Hecho
-
 	t_list * possible_deadlocked_trainers;
 	possible_deadlocked_trainers = list_create();
 
@@ -868,24 +866,15 @@ int is_in_deadlock(trainer * waiting_trainer){
 	return circular_chain(possible_deadlocked_trainers);
 }
 
-void solve_deadlock_for(trainer * myself){
-	t_list * deadlocked_trainers;
-	deadlocked_trainers = list_create();
-
-	deadlocked_trainers = find_pokemons_allocators(myself);
-
-	block_trainer(myself);
-}
-
 bool exists_path_to(trainer * from, trainer * to) {
-	int i, j;
-	t_list * allocations = find_pokemons_allocators(from);
+	trainer * t;
+	t_list * allocations = find_pokemons_allocators(from);	//Entrenadores que tengan algo que necesito
 	bool any_is = false;
-	for(i=0 ; i<allocations->elements_count ; i++) {
-		trainer * t = list_get(allocations, i);
+	for(int i=0 ; i<allocations->elements_count ; i++) {	//Para cada entrenador que tiene algo que necesito
+		t = list_get(allocations, i);
 		if(t->id == to->id) {
 			any_is = true;
-			return true;
+			return any_is;
 		} else {
 			any_is = any_is | exists_path_to(t, to);
 		}
@@ -916,8 +905,8 @@ void compute_path_to(trainer * start, trainer * target, t_list * paths, t_list *
 }
 
 void compute_deadlocks() {
-
 	int i, j;
+
 	for(i=0 ; i<trainers->elements_count ; i++) {
 		trainer * ttrainer = list_get(trainers, i);
 		//t_list * tspares = spare_pokemons(ttrainer);
