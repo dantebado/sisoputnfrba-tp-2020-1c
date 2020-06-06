@@ -1200,6 +1200,7 @@ client * add_or_get_client(int socket, char * ip, int port) {
 		}
 	}
 	client * c = build_client(socket, ip, port);
+	pthread_mutex_init(&c->mutex, NULL);
 	pthread_mutex_lock(&clients_mutex);
 	list_add(clients, c);
 	pthread_mutex_unlock(&clients_mutex);
