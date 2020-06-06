@@ -1,5 +1,5 @@
 TARGET = broker
-LIBS = -lcommons -llibrary -lpthread
+LIBS = -lcommons -llibrary -lpthread -lreadline
 CC = gcc
 CFLAGS = -g -Wall
 
