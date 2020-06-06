@@ -131,14 +131,14 @@ typedef struct {
 	int socket;
 	char * ip;
 	int port;
-	sem_t * mutex;
+	pthread_mutex_t mutex;
 } client __attribute__((packed));
 
 typedef struct {
 	_message_queue_name name;
 	t_list * subscribers;
 	t_list * messages;
-	sem_t * mutex;
+	pthread_mutex_t mutex;
 	pthread_t thread;
 } message_queue __attribute__((packed));
 
@@ -264,7 +264,7 @@ typedef struct{
 	float last_estimation;
 
 	pthread_t * thread;
-	sem_t * mutex;
+	pthread_mutex_t mutex;
 
 	trainer_action_status status;
 

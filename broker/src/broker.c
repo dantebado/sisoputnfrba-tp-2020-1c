@@ -10,17 +10,17 @@ t_list * queues;
 int last_message_id;
 
 t_list * clients;
-sem_t * clients_mutex;
+pthread_mutex_t clients_mutex;
 
 t_list * messages_index;
-sem_t * messages_index_mutex;
+pthread_mutex_t messages_index_mutex;
 
 t_list * partitions;
 void * main_memory;
 int memory_free_space;
-sem_t * memory_access_mutex;
+pthread_mutex_t memory_access_mutex;
 int time_counter;
-sem_t * time_counter_mutex;
+pthread_mutex_t time_counter_mutex;
 
 /*/
  *
@@ -132,11 +132,8 @@ void setup(int argc, char **argv) {
 	log_info(LOGGER, "Configuration loaded");
 
 	clients = list_create();
-	clients_mutex = malloc(sizeof(sem_t));
-	sem_init(clients_mutex, 0, 1);
-
-	messages_index_mutex = malloc(sizeof(sem_t));
-	sem_init(messages_index_mutex, 0, 1);
+	pthread_mutex_init(&clients_mutex, NULL);
+	pthread_mutex_init(&messages_index_mutex, NULL);
 
 	messages_index = list_create();
 
@@ -167,19 +164,17 @@ void init_memory() {
 	log_info(LOGGER, "%s, with %s replacement and %s seeking", enum_to_memory_alg(CONFIG.memory_alg),
 			enum_to_memory_replacement_alg(CONFIG.remplacement_alg), enum_to_memory_selection_alg(CONFIG.seek_alg));
 
-	time_counter_mutex = malloc(sizeof(sem_t));
-	sem_init(time_counter_mutex, 0, 1);
+	pthread_mutex_init(&time_counter_mutex, NULL);
 	time_counter = 0;
 	partitions = list_create();
 	main_memory = malloc(CONFIG.memory_size);
 	memory_free_space = CONFIG.memory_size;
 
-	memory_access_mutex = malloc(sizeof(sem_t));
-	sem_init(memory_access_mutex, 0, 1);
+	pthread_mutex_init(&memory_access_mutex, NULL);
 
-	sem_wait(memory_access_mutex);
+	pthread_mutex_lock(&memory_access_mutex);
 		list_add(partitions, partition_create(0, CONFIG.memory_size, main_memory, NULL));
-	sem_post(memory_access_mutex);
+	pthread_mutex_unlock(&memory_access_mutex);
 }
 char * enum_to_memory_alg(_memory_alg alg) {
 	switch(alg) {
@@ -241,7 +236,7 @@ memory_partition * bs_split_partition(memory_partition * partition) {
 	memory_partition * p1 = partition_create(partition->number, split_size, partition->partition_start, NULL);
 	memory_partition * p2 = partition_create(partition->number + 1, split_size, partition->partition_start + split_size, NULL);
 
-	sem_wait(memory_access_mutex);
+	pthread_mutex_lock(&memory_access_mutex);
 	t_list * a_list = list_create();
 	int i;
 	for(i=0 ; i<partitions->elements_count ; i++) {
@@ -258,7 +253,7 @@ memory_partition * bs_split_partition(memory_partition * partition) {
 	}
 	free(partition);
 	partitions = a_list;
-	sem_post(memory_access_mutex);
+	pthread_mutex_unlock(&memory_access_mutex);
 	return p1;
 }
 memory_partition * get_bs_available_partition_by_size(int partition_size) {
@@ -325,7 +320,7 @@ memory_partition * get_partitions_available_by_alg(int partition_size) {
 			return found_memory;
 		}
 
-		sem_wait(memory_access_mutex);
+		pthread_mutex_lock(&memory_access_mutex);
 		t_list * npart = list_create();
 		for(i=0 ; i<found_memory->number ; i++) {
 			list_add(npart, list_get(partitions, i));
@@ -345,7 +340,7 @@ memory_partition * get_partitions_available_by_alg(int partition_size) {
 		}
 		list_destroy(partitions);
 		partitions = npart;
-		sem_post(memory_access_mutex);
+		pthread_mutex_unlock(&memory_access_mutex);
 
 		return found_memory;
 	}
@@ -412,8 +407,8 @@ void print_partition_info(memory_partition * partition) {
 }
 void free_memory_partition(memory_partition * partition) {
 	message_queue * queue = find_queue_by_name(partition->message->message->header->queue);
-	sem_wait(queue->mutex);
-	sem_wait(messages_index_mutex);
+	pthread_mutex_lock(&queue->mutex);
+	pthread_mutex_lock(&messages_index_mutex);
 
 		_Bool * is_same_message(broker_message * p1) {
 			return p1->message->header->message_id == partition->message->message->header->message_id;
@@ -421,10 +416,10 @@ void free_memory_partition(memory_partition * partition) {
 		list_remove_by_condition(messages_index, is_same_message);
 		list_remove_by_condition(queue->messages, is_same_message);
 
-	sem_post(messages_index_mutex);
-	sem_post(queue->mutex);
+	pthread_mutex_unlock(&messages_index_mutex);
+	pthread_mutex_unlock(&queue->mutex);
 
-	sem_wait(memory_access_mutex);
+	pthread_mutex_lock(&memory_access_mutex);
 	partition->free_size = partition->partition_size;
 	partition->message = NULL;
 	partition->is_free = true;
@@ -434,7 +429,7 @@ void free_memory_partition(memory_partition * partition) {
 	if(CONFIG.memory_alg == BUDDY_SYSTEM) {
 		compact_memory(true);
 	}
-	sem_post(memory_access_mutex);
+	pthread_mutex_unlock(&memory_access_mutex);
 }
 memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 	memory_partition * the_partition = get_available_partition_by_payload_size(payload_size);
@@ -453,7 +448,7 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 }
 void compact_memory(int already_reserved_mutex) {
 	if(!already_reserved_mutex){
-		sem_wait(memory_access_mutex);
+		pthread_mutex_lock(&memory_access_mutex);
 	}
 
 	int i;
@@ -531,7 +526,7 @@ void compact_memory(int already_reserved_mutex) {
 	}
 
 	if(!already_reserved_mutex){
-		sem_post(memory_access_mutex);
+		pthread_mutex_unlock(&memory_access_mutex);
 	}
 	log_info(LOGGER, "Memory has been compacted");
 }
@@ -574,9 +569,9 @@ void * access_partition(memory_partition * partition) {
 	return partition->partition_start;
 }
 int get_time_counter() {
-	sem_wait(time_counter_mutex);
+	pthread_mutex_lock(&time_counter_mutex);
 	time_counter++;
-	sem_post(time_counter_mutex);
+	pthread_mutex_unlock(&time_counter_mutex);
 	return time_counter;
 }
 
@@ -591,8 +586,8 @@ void init_queue(_message_queue_name name) {
 	queue->messages = list_create();
 	queue->subscribers = list_create();
 	queue->name = name;
-	queue->mutex = malloc(sizeof(sem_t));
-	sem_init(queue->mutex, 0, 1);
+
+	pthread_mutex_init(&queue->mutex, NULL);
 	list_add(queues, queue);
 
 	pthread_create(&queue->thread, NULL, queue_thread_function, queue);
@@ -643,19 +638,19 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	final_message->payload_address_copy = partition;
 
 	log_info(LOGGER, "Adding message %d to queue %s with correlative %d", message->header->message_id, enum_to_queue_name(queue_name), message->header->correlative_id);
-	sem_wait(queue->mutex);
-	sem_wait(messages_index_mutex);
+	pthread_mutex_lock(&queue->mutex);
+	pthread_mutex_lock(&messages_index_mutex);
 	list_add(queue->messages, final_message);
 	list_add(messages_index, final_message);
-	sem_post(messages_index_mutex);
-	sem_post(queue->mutex);
+	pthread_mutex_unlock(&messages_index_mutex);
+	pthread_mutex_unlock(&queue->mutex);
 	log_info(LOGGER, "\t\tAdded");
 	return OPT_OK;
 }
 void queue_thread_function(message_queue * queue) {
 	int i, j;
 	while(1) {
-		sem_wait(queue->mutex);
+		pthread_mutex_lock(&queue->mutex);
 	/*	log_info(LOGGER, "Queue %d has %d messages and %d suscriptors",
 				queue->name,
 				queue->messages->elements_count,
@@ -678,11 +673,11 @@ void queue_thread_function(message_queue * queue) {
 							tmessage->message->header->message_id,
 							tsubscriber->socket);
 
-					sem_wait(tsubscriber->mutex);
+					pthread_mutex_lock(&tsubscriber->mutex);
 					send_pokemon_message_with_id(tsubscriber->socket, tmessage->message, 0,
 							tmessage->message->header->message_id,
 							tmessage->message->header->correlative_id);
-					sem_post(tsubscriber->mutex);
+					pthread_mutex_unlock(&tsubscriber->mutex);
 
 					list_add(tmessage->already_sent, tsubscriber);
 				}
@@ -693,7 +688,7 @@ void queue_thread_function(message_queue * queue) {
 			tmessage->message->is_serialized = true;
 			tmessage->message->payload = partition;
 		}
-		sem_post(queue->mutex);
+		pthread_mutex_unlock(&queue->mutex);
 
 		sleep(2);
 	}
@@ -712,20 +707,20 @@ int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_na
 
 	message_queue * queue = find_queue_by_name(queue_name);
 	if(queue != NULL) {
-		sem_wait(queue->mutex);
+		pthread_mutex_lock(&queue->mutex);
 		list_add(queue->subscribers, sub);
-		sem_post(queue->mutex);
+		pthread_mutex_unlock(&queue->mutex);
 
 		log_info(LOGGER, "Subscription successful");
-		sem_wait(sub->mutex);
+		pthread_mutex_lock(&sub->mutex);
 		send_int(socket, OPT_OK);
-		sem_post(sub->mutex);
+		pthread_mutex_unlock(&sub->mutex);
 		return OPT_OK;
 	} else {
 		log_info(LOGGER, "Cannot find queue %d", queue_name);
-		sem_wait(sub->mutex);
+		pthread_mutex_lock(&sub->mutex);
 		send_int(socket, OPT_FAILED);
-		sem_post(sub->mutex);
+		pthread_mutex_unlock(&sub->mutex);
 		return OPT_FAILED;
 	}
 }
@@ -737,7 +732,7 @@ int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queu
 
 	if(queue != NULL) {
 		int i, r = 0;
-		sem_wait(queue->mutex);
+		pthread_mutex_lock(&queue->mutex);
 		for(i=0 ; i<queue->subscribers->elements_count ; i++) {
 			client * s = list_get(queue->subscribers, i);
 			if(is_same_client(s, tc)) {
@@ -745,25 +740,25 @@ int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queu
 				list_remove(queue->subscribers, i);
 			}
 		}
-		sem_post(queue->mutex);
+		pthread_mutex_unlock(&queue->mutex);
 		if(r == 0) {
 			log_info(LOGGER, "Unsubscription failed");
-			sem_wait(tc->mutex);
+			pthread_mutex_lock(&tc->mutex);
 			send_int(socket, OPT_FAILED);
-			sem_post(tc->mutex);
+			pthread_mutex_unlock(&tc->mutex);
 			return OPT_FAILED;
 		} else {
 			log_info(LOGGER, "Unsubscription successful");
-			sem_wait(tc->mutex);
+			pthread_mutex_lock(&tc->mutex);
 			send_int(socket, OPT_OK);
-			sem_post(tc->mutex);
+			pthread_mutex_unlock(&tc->mutex);
 			return OPT_OK;
 		}
 	} else {
 		log_info(LOGGER, "Cannot find queue %d", queue_name);
-		sem_wait(tc->mutex);
+		pthread_mutex_lock(&tc->mutex);
 		send_int(socket, OPT_FAILED);
-		sem_post(tc->mutex);
+		pthread_mutex_unlock(&tc->mutex);
 		return OPT_FAILED;
 	}
 }
@@ -772,7 +767,7 @@ void unsubscribe_socket_from_all_queues(int fd, char * ip, int port) {
 	int i, j;
 	for(i=0 ; i<queues->elements_count ; i++) {
 		message_queue * queue = list_get(queues, i);
-		sem_wait(queue->mutex);
+		pthread_mutex_lock(&queue->mutex);
 		for(j=0 ; j<queue->subscribers->elements_count ; j++) {
 			client * sub = list_get(queue->subscribers, j);
 			if(is_same_client(sub, tclient)) {
@@ -780,7 +775,7 @@ void unsubscribe_socket_from_all_queues(int fd, char * ip, int port) {
 				j = queue->subscribers->elements_count + 1;
 			}
 		}
-		sem_post(queue->mutex);
+		pthread_mutex_unlock(&queue->mutex);
 	}
 }
 
@@ -1060,7 +1055,7 @@ int server_function(int socket) {
 
 					client * from = add_or_get_client(fd, ip, port);
 
-					sem_wait(from->mutex);
+					pthread_mutex_lock(&from->mutex);
 					send_int(fd, message_id);
 
 					log_info(LOGGER, "Incoming message from socket %d", fd);
@@ -1079,7 +1074,7 @@ int server_function(int socket) {
 					} else {
 						log_error(LOGGER, "Error adding message %d to queue", message->header->message_id);
 					}
-					sem_post(from->mutex);
+					pthread_mutex_unlock(&from->mutex);
 				}
 				break;
 			case MESSAGE_ACK:;
@@ -1205,8 +1200,8 @@ client * add_or_get_client(int socket, char * ip, int port) {
 		}
 	}
 	client * c = build_client(socket, ip, port);
-	sem_wait(clients_mutex);
+	pthread_mutex_lock(&clients_mutex);
 	list_add(clients, c);
-	sem_post(clients_mutex);
+	pthread_mutex_unlock(&clients_mutex);
 	return c;
 }

@@ -9,17 +9,17 @@ t_list * trainers;
 
 t_list * global_requirements;
 
-sem_t * required_pokemons_mutex;
+pthread_mutex_t required_pokemons_mutex;
 t_list * required_pokemons;
 
-sem_t * ready_queue_mutex;
+pthread_mutex_t ready_queue_mutex;
 t_list * ready_queue;
 
 trainer * executing_trainer;
 
 //SEMAPHORES
-sem_t * executing_mutex;
-sem_t * broker_mutex;
+pthread_mutex_t executing_mutex;
+pthread_mutex_t broker_mutex;
 
 pthread_t * exec_thread;
 
@@ -106,9 +106,9 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 				//Veo si me sirve el pokemon que aparecio
 				if(is_required(apm->pokemon)) {
 					log_info(LOGGER, "Adding to required pokemons");
-					sem_wait(required_pokemons_mutex);
+					pthread_mutex_lock(&required_pokemons_mutex);
 					list_add(required_pokemons, apm);
-					sem_post(required_pokemons_mutex);
+					pthread_mutex_unlock(&required_pokemons_mutex);
 					log_info(LOGGER, "\tAdded");
 					//Agregado a la lista de pokemones requeridos
 					//En el momento que un entrenador se encuentre dormido o libre hay que planificarlo
@@ -175,9 +175,9 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 					if(is_required(lpm->pokemon)) {
 						for(i=0 ; i<lpm->locations_counter ; i++) {
 							location * tlocation = list_get(lpm->locations, i);
-							sem_wait(required_pokemons_mutex);
+							pthread_mutex_lock(&required_pokemons_mutex);
 							list_add(required_pokemons, appeared_pokemon_create(lpm->pokemon, tlocation->x, tlocation->y));
-							sem_post(required_pokemons_mutex);
+							pthread_mutex_unlock(&required_pokemons_mutex);
 						}
 					} else {
 					}
@@ -278,7 +278,7 @@ int broker_server_function() {
 	while(1) {
 		net_message_header * header = malloc(sizeof(net_message_header));
 
-		sem_wait(broker_mutex);
+		pthread_mutex_lock(&broker_mutex);
 		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
 		if(!internal_broker_need) {
 			read(CONFIG.broker_socket, header, sizeof(net_message_header));
@@ -287,7 +287,7 @@ int broker_server_function() {
 
 			process_pokemon_message(message, 1);
 		}
-		sem_post(broker_mutex);
+		pthread_mutex_unlock(&broker_mutex);
 	}
 
 	return 0;
@@ -389,11 +389,8 @@ void setup(int argc, char **argv) {
 	global_requirements = list_create();
 	executing_trainer = NULL;
 
-	required_pokemons_mutex = malloc(sizeof(sem_t));
-	sem_init(required_pokemons_mutex, 0, 1);
-
-	broker_mutex = malloc(sizeof(sem_t));
-	sem_init(broker_mutex, 0, 1);
+	pthread_mutex_init(&required_pokemons_mutex, NULL);
+	pthread_mutex_init(&broker_mutex, NULL);
 
 	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
@@ -492,8 +489,8 @@ void setup(int argc, char **argv) {
 
 			t->stats->current_activity = NULL;
 
-			t->stats->mutex = malloc(sizeof(sem_t));
-			sem_init(t->stats->mutex, 0, 0);
+			pthread_mutex_init(&t->stats->mutex, NULL);
+			pthread_mutex_lock(&t->stats->mutex);
 
 			pthread_t * thread_exec = malloc(sizeof(pthread_t));
 			pthread_create(thread_exec, NULL, executing, t);
@@ -503,20 +500,18 @@ void setup(int argc, char **argv) {
 		}
 	}
 
-	log_info(LOGGER, "asdasd");
-	log_info(LOGGER, "%d", exists_path_to( list_get(trainers, 3), list_get(trainers, 2) ));
+	//TODO debug de deadlock
+	//log_info(LOGGER, "asdasd");
+	//log_info(LOGGER, "%d", exists_path_to( list_get(trainers, 3), list_get(trainers, 2) ));
 
-	executing_mutex = malloc(sizeof(sem_t));
-	sem_init(executing_mutex, 0, 1);
-
-	ready_queue_mutex = malloc(sizeof(sem_t));
-	sem_init(ready_queue_mutex, 0, 1);
+	pthread_mutex_init(&executing_mutex, NULL);
+	pthread_mutex_init(&ready_queue_mutex, NULL);
 
 	set_required_pokemons();
 	print_current_requirements();
 
 	//CREAMOS SOCKET DE ESCUCHA CON EL BROKER
-	/*CONFIG.broker_socket = create_socket();
+	CONFIG.broker_socket = create_socket();
 	connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port);
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, CONFIG.broker_socket);
 
@@ -525,7 +520,7 @@ void setup(int argc, char **argv) {
 	pthread_join(exec_thread, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);*/
+	pthread_join(CONFIG.broker_thread, NULL);
 }
 
 void _diff_my_caught_pokemons(trainer * ttrainer){
@@ -582,7 +577,7 @@ void sort_by_burst(){
 
 void sort_queues(){
 	//Hay que cambiar los algoritmos de planificacion en tiempo real
-	sem_wait(ready_queue_mutex);
+	pthread_mutex_lock(&ready_queue_mutex);
 	switch(CONFIG.planning_alg){
 		case FIFO_PLANNING: //Queda igual
 			break;
@@ -609,7 +604,7 @@ void sort_queues(){
 
 		log_info(LOGGER, "Now executing trainer %d", executing_trainer->id);
 	}
-	sem_post(ready_queue_mutex);
+	pthread_mutex_unlock(&ready_queue_mutex);
 }
 
 int is_trainer_completed(trainer * t) {
@@ -660,7 +655,7 @@ void executing(trainer * t){
 	log_info(LOGGER, "Init thread, trainer %d", t->id);
 
 	while(1){
-		sem_wait(t->stats->mutex);
+		pthread_mutex_lock(&t->stats->mutex);
 
 		log_info(LOGGER, "Trainer %d executing", t->id);
 
@@ -753,7 +748,7 @@ void executing(trainer * t){
 			t->stats->quantum_counter = 0;
 		}
 
-		sem_post(executing_mutex);
+		pthread_mutex_unlock(&executing_mutex);
 	}
 }
 
@@ -769,7 +764,7 @@ trainer * find_free_trainer() {
 }
 
 void compute_pending_actions() {
-	sem_wait(required_pokemons_mutex);
+	pthread_mutex_lock(&required_pokemons_mutex);
 	while(required_pokemons->elements_count > 0) {
 		appeared_pokemon_message * apm = list_get(required_pokemons, 0);
 		trainer * free_trainer = closest_free_trainer(apm->x, apm->y);
@@ -786,7 +781,7 @@ void compute_pending_actions() {
 
 		list_remove(required_pokemons, 0);
 	}
-	sem_post(required_pokemons_mutex);
+	pthread_mutex_unlock(&required_pokemons_mutex);
 }
 
 void exec_thread_function() {
@@ -798,8 +793,8 @@ void exec_thread_function() {
 
 		usleep(CONFIG.cpu_delay * 1000 * 1000);
 		if(executing_trainer != NULL) {
-			sem_wait(executing_mutex);
-			sem_post(executing_trainer->stats->mutex);
+			pthread_mutex_lock(&executing_mutex);
+			pthread_mutex_unlock(&executing_trainer->stats->mutex);
 		} else {
 			//OVERHEARD
 		}

@@ -5,11 +5,11 @@ gamecard_config CONFIG;
 
 tall_grass_fs * tall_grass;
 
-sem_t * file_operation_mutex;
-sem_t * directory_operation_mutex;
+pthread_mutex_t file_operation_mutex;
+pthread_mutex_t directory_operation_mutex;
 
 int internal_broker_need;
-sem_t * broker_mutex;
+pthread_mutex_t broker_mutex;
 
 //PROTOTYPES
 int process_pokemon_message(gamecard_thread_payload * payload);
@@ -181,8 +181,7 @@ void setup(int argc, char **argv) {
 
 	log_info(LOGGER, "Configuration Loaded");
 
-	broker_mutex = malloc(sizeof(sem_t));
-	sem_init(broker_mutex, 0, 1);
+	pthread_mutex_init(&broker_mutex, NULL);
 
 	internal_broker_need = false;
 
@@ -229,7 +228,7 @@ int broker_server_function() {
 	while(1) {
 		net_message_header * header = malloc(sizeof(net_message_header));
 
-		sem_wait(broker_mutex);
+		pthread_mutex_lock(&broker_mutex);
 		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
 		if(!internal_broker_need) {
 			read(CONFIG.broker_socket, header, sizeof(net_message_header));
@@ -243,7 +242,7 @@ int broker_server_function() {
 			pthread_t the_thread;
 			pthread_create(&the_thread, NULL, process_pokemon_message, payload);
 		}
-		sem_post(broker_mutex);
+		pthread_mutex_unlock(&broker_mutex);
 	}
 
 	return 0;
@@ -282,11 +281,8 @@ int server_function() {
 void setup_tall_grass() {
 	log_info(LOGGER, "Starting TallGrass");
 
-	file_operation_mutex = malloc(sizeof(sem_t));
-	sem_init(file_operation_mutex, NULL, 1);
-
-	directory_operation_mutex = malloc(sizeof(sem_t));
-	sem_init(directory_operation_mutex, NULL, 1);
+	pthread_mutex_init(&file_operation_mutex, NULL);
+	pthread_mutex_init(&directory_operation_mutex, NULL);
 
 	char * _tall_grass_metadata_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
 	string_append(&_tall_grass_metadata_path, "/Metadata/Metadata.bin");
@@ -379,7 +375,7 @@ char ** split_directory_tree(char * full_path) {
 }
 
 char * tall_grass_get_or_create_directory(char * path) {
-	sem_wait(directory_operation_mutex);
+	pthread_mutex_lock(&directory_operation_mutex);
 
 	char ** dp = split_directory_tree(path);
 	int count = count_character_in_string(path, '/');
@@ -426,7 +422,7 @@ char * tall_grass_get_or_create_directory(char * path) {
 		config_destroy(dconfig);
 	}
 
-	sem_post(directory_operation_mutex);
+	pthread_mutex_unlock(&directory_operation_mutex);
 	return directory_path;
 }
 
@@ -463,14 +459,14 @@ int aux_round_up(int int_value, float float_value) {
  * is_directory = -4
  * */
 int try_open_file(char * path, char * filename) {
-	sem_wait(file_operation_mutex);
+	pthread_mutex_lock(&file_operation_mutex);
 
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
 		log_error(LOGGER, "Cannot open file. Directory doesnt exist");
 
-		sem_post(file_operation_mutex);
+		pthread_mutex_unlock(&file_operation_mutex);
 		return -2;
 	}
 
@@ -483,7 +479,7 @@ int try_open_file(char * path, char * filename) {
 	if(file_metadata_file == NULL) {
 		log_error(LOGGER, "File doesnt exists");
 
-		sem_post(file_operation_mutex);
+		pthread_mutex_unlock(&file_operation_mutex);
 		return -3;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
@@ -500,27 +496,27 @@ int try_open_file(char * path, char * filename) {
 		log_error(LOGGER, "Cannot open file %s, is already open", filename);
 		config_destroy(existing_config);
 
-		sem_post(file_operation_mutex);
+		pthread_mutex_unlock(&file_operation_mutex);
 		return -1;
 	}
 
 	config_set_value(existing_config, "OPEN", "Y");
 	config_save(existing_config);
 
-	sem_post(file_operation_mutex);
+	pthread_mutex_unlock(&file_operation_mutex);
 
 	return 1;
 }
 
 int try_close_file(char * path, char * filename) {
-	sem_wait(file_operation_mutex);
+	pthread_mutex_lock(&file_operation_mutex);
 
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
 	if(directory_path == NULL) {
 		log_error(LOGGER, "Cannot close file. Directory doesnt exist");
 
-		sem_post(file_operation_mutex);
+		pthread_mutex_unlock(&file_operation_mutex);
 		return false;
 	}
 
@@ -533,7 +529,7 @@ int try_close_file(char * path, char * filename) {
 	if(file_metadata_file == NULL) {
 		log_error(LOGGER, "Cannot close file %s. File does not exist", filename);
 
-		sem_post(file_operation_mutex);
+		pthread_mutex_unlock(&file_operation_mutex);
 		return false;
 	}
 	t_config * existing_config = config_create(file_metadata_path);
@@ -550,14 +546,14 @@ int try_close_file(char * path, char * filename) {
 		log_error(LOGGER, "Cannot close file %s, it is already closed", filename);
 		config_destroy(existing_config);
 
-		sem_post(file_operation_mutex);
+		pthread_mutex_unlock(&file_operation_mutex);
 		return false;
 	}
 
 	config_set_value(existing_config, "OPEN", "N");
 	config_save(existing_config);
 
-	sem_post(file_operation_mutex);
+	pthread_mutex_unlock(&file_operation_mutex);
 
 	return true;
 }

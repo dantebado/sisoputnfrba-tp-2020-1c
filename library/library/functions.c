@@ -675,8 +675,7 @@ client * build_client(int socket, char * ip, int port) {
 	c->ip = ip;
 	c->socket = socket;
 	c->port = port;
-	c->mutex = malloc(sizeof(sem_t));
-	sem_init(c->mutex, 0, 1);
+	pthread_mutex_init(&c->mutex, NULL);
 	return c;
 }
 
