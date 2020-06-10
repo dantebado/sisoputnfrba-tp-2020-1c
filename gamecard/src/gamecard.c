@@ -125,33 +125,30 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 			get_pokemon_message * gpm = message->payload;
 			open_result = try_open_file("/Pokemon", gpm->pokemon);
 
+			log_info(LOGGER, "REcibi un GET POKEMON %d %d", from_broker, open_result);
+
 			switch(open_result) {
-			case 1: ;
-				char * fileContent = tall_grass_read_file("/Pokemon", gpm->pokemon, true);
-				if(fileContent != NULL) {
-					pokemon_file * pf = deserialize_pokemon_file(fileContent);
+				case 1: ;
+					char * fileContent = tall_grass_read_file("/Pokemon", gpm->pokemon, true);
+					if(fileContent != NULL) {
+						pokemon_file * pf = deserialize_pokemon_file(fileContent);
 
-					t_list* listaPosiciones = list_create();
-					int i;
-					for(i=0; i < pf->locations->elements_count; i++){
-						pokemon_file_line * pfl = list_get(pf->locations, i);
-						list_add(listaPosiciones, pfl->position);
+						t_list* listaPosiciones = list_create();
+						int i;
+						for(i=0; i < pf->locations->elements_count; i++){
+							pokemon_file_line * pfl = list_get(pf->locations, i);
+							list_add(listaPosiciones, pfl->position);
+						}
+						queue_message * response = localized_pokemon_create(gpm->pokemon, listaPosiciones);
+						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 					}
-					queue_message * response = localized_pokemon_create(gpm->pokemon, listaPosiciones);
-					send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-				}
-
-			break;
-			case -1:
-				log_info(LOGGER, "Pokemon not exists");
-				break;
-			default:
-
-			break;
+					break;
+				case -1:
+					log_info(LOGGER, "File is already open. Retrying");
+				default:
+					log_error(LOGGER, "File does not exists or is a directory");
+					break;
 			}
-			break;
-			default:
-			break;
 		}
 	}
 
