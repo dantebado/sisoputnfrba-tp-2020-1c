@@ -4,8 +4,26 @@
 #include <readline/history.h>
 
 void * gameboy_console_launcher(gameboy_config CONFIG) {
-	char *linea, *command = NULL, *param1, *param2, *param3, *param4, *param5;
-	int command_number, quit = 0;
+	char *linea;
+	int quit = 0;
+
+	printf("Bienvenido al GameBoy\n");
+	printf("Escribi 'info' para obtener una lista de comandos\n");
+
+	while(quit == 0){
+		linea = readline(">>> ");
+		add_history(linea);
+
+		execute_full_line(linea, true, &quit, CONFIG);
+
+		free(linea);
+	}
+	return EXIT_SUCCESS;
+}
+
+int execute_full_line(char * linea, int console_mode, int * quit, gameboy_config CONFIG) {
+	char *command = NULL, *param1, *param2, *param3, *param4, *param5;
+	int command_number;
 
 	const char* command_list[] = { "salir", "info",
 			"BROKER NEW_POKEMON", "BROKER APPEARED_POKEMON", "BROKER CATCH_POKEMON", "BROKER CAUGHT_POKEMON", "BROKER GET_POKEMON",
@@ -16,46 +34,38 @@ void * gameboy_console_launcher(gameboy_config CONFIG) {
 	int command_list_length = (int) sizeof(command_list) /
 			sizeof(command_list[0]);
 
-	printf("Bienvenido al GameBoy\n");
-	printf("Escribi 'info' para obtener una lista de comandos\n");
+	command = NULL;
+	param1 = NULL;
+	param2 = NULL;
+	param3 = NULL;
+	param4 = NULL;
+	param5 = NULL;
 
-	while(quit == 0){
-		linea = readline(">>> ");
-		add_history(linea);
-
-		command = NULL;
-		param1 = NULL;
-		param2 = NULL;
-		param3 = NULL;
-		param4 = NULL;
-		param5 = NULL;
-
-		if(parse(&linea, &command, &param1, &param2, &param3, &param4, &param5)){
+	if(parse(&linea, &command, &param1, &param2, &param3, &param4, &param5)){
+		if(console_mode)
 			printf("Demasiados parámetros\n");
+	} else {
+
+		char * to_search = NULL;
+
+		if(command == NULL) {
+			to_search = linea;
 		} else {
-
-			char * to_search = NULL;
-
-			if(command == NULL) {
-				to_search = linea;
-			} else {
-				to_search = malloc(sizeof(char) * (strlen(linea) + strlen(command) + 2));
-				memcpy(to_search, linea, strlen(linea) * sizeof(char));
-				to_search[strlen(linea)] = ' ';
-				memcpy(to_search+strlen(linea)+1, command, strlen(command) * sizeof(char));
-				to_search[strlen(linea) + strlen(command) + 1] = '\0';
-			}
-
-			command_number = find_in_array(to_search,
-					command_list, command_list_length);
-
-			command_number == EXIT ? quit = 1 : execute(command_number,
-					param1, param2, param3, param4, param5, CONFIG);
+			to_search = malloc(sizeof(char) * (strlen(linea) + strlen(command) + 2));
+			memcpy(to_search, linea, strlen(linea) * sizeof(char));
+			to_search[strlen(linea)] = ' ';
+			memcpy(to_search+strlen(linea)+1, command, strlen(command) * sizeof(char));
+			to_search[strlen(linea) + strlen(command) + 1] = '\0';
 		}
 
-		free(linea);
+		command_number = find_in_array(to_search,
+				command_list, command_list_length);
+
+		command_number == EXIT ? *quit = 1 : execute(command_number,
+				param1, param2, param3, param4, param5, CONFIG);
 	}
-	return EXIT_SUCCESS;
+
+	return true;
 }
 
 int parse(char **linea, char **command, char **param1, char **param2, char **param3, char **param4, char **param5){
