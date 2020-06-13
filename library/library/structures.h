@@ -223,11 +223,18 @@ typedef struct {
  *
  * */
 
-typedef struct {
-	char * pokemon;
-	int spare;
-	int reserved;
-} trainer_spare_pokemons;
+/*
+ * IMPORTANTE
+ *
+ * Al principio entran por config los pokemones que el entrenador tiene y los pokemones objetivos.
+ * De acuerdo a la respuesta de una pregunta surgida, los pokemones que un entrenador tiene y que a la vez
+ * son un objetivo, deben eliminarse de la lista de objetivos y pokemones.
+ *
+ * ESTRATEGIA INTERNA: Eliminamos los pokemones de la lista de objetivos a medida que se van atrapando.
+ * Si un entrenador captura un pokemon que no necesita, es agregado a la lista de pokemones del entrenador.
+ * De esta forma, se puede tener control sobre los pokemones que un entrenador tiene y puede repartirle a
+ * otros entrenadores en caso de deadlock o llegar a finalizar el objetivo del team.
+ */
 
 typedef struct {
 	char * name;
@@ -280,17 +287,6 @@ typedef struct {
 
 	trainer_action * stats;
 } trainer __attribute__((packed));
-
-typedef enum{
-	BLOCKED_POKEMON,
-	WAITING_POKEMON,
-	RELEASED_POKEMON
-} pokemon_status;
-
-typedef struct{
-	localized_pokemon_message lpm;
-	pokemon_status status;
-} pokemon_allocation;
 
 typedef struct{
 	int global_cpu_counter;
