@@ -399,7 +399,9 @@ void print_partitions_info() {
 	log_info(LOGGER, "END  PARTIITON  DATA");
 }
 void print_partition_info(memory_partition * partition) {
-	log_info(LOGGER, "\t\t%d SIZE %d Bytes, Free %d LA %d @ %d - %d", partition->number,
+	log_info(LOGGER, "\t\t%d @ %d SIZE %d Bytes, Free %d LA %d @ %d - %d",
+			partition->number,
+			partition->partition_start - main_memory,
 			partition->partition_size, partition->is_free,
 			partition->access_time,
 			partition->partition_start,
@@ -443,6 +445,8 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 
 		memory_free_space -= payload_size;
 	}
+
+	print_partitions_info();
 
 	return the_partition;
 }

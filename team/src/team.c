@@ -5,6 +5,8 @@ team_config CONFIG;
 
 int internal_broker_need;
 
+int has_broker_connection = false;
+
 t_list * trainers;
 
 t_list * global_requirements;
@@ -252,6 +254,7 @@ int broker_server_function() {
 			sleep(CONFIG.retry_time_conn);
 		} else {
 			success_listening = success;
+			has_broker_connection = true;
 		}
 	} while (success_listening == failed);
 
@@ -327,6 +330,8 @@ trainer * closest_free_trainer(int pos_x, int pos_y){
 	trainer * closest_trainer = NULL;
 	int i = 0;
 
+	log_info(LOGGER, "Finding closest trainer to %d %d", pos_x, pos_y);
+
 	for(i=0 ; i<trainers->elements_count ; i++) {
 		trainer * ttrainer = list_get(trainers, i);
 
@@ -336,13 +341,15 @@ trainer * closest_free_trainer(int pos_x, int pos_y){
 				closest_distance = tdistance;
 				closest_trainer = ttrainer;
 			} else {
-				if(closest_distance > 1) {
+				if(closest_distance > tdistance) {
 					closest_distance = tdistance;
 					closest_trainer = ttrainer;
 				}
 			}
 		}
 	}
+
+	log_info(LOGGER, "Closest trainer to %d %d is %d with position %d %d", pos_x, pos_y, closest_trainer->id, closest_trainer->x, closest_trainer->y);
 
 	return closest_trainer;
 }
@@ -497,6 +504,8 @@ void setup(int argc, char **argv) {
 			t->stats->thread = thread_exec;
 
 			list_add(trainers, t);
+
+			log_info(LOGGER, "Trainer %d @ [%d - %d]", t->id, t->x, t->y);
 		}
 	}
 
@@ -686,13 +695,17 @@ void executing(trainer * t){
 
 						internal_broker_need = true;
 							log_info(LOGGER, "\tIs already there, sending catch msg");
-							send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+
+							if(has_broker_connection == true) {
+								send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+							}
 						internal_broker_need = false;
 
 						t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
 
 						log_info(LOGGER, "\t\tCatch msg sent with ID %d", t->stats->current_activity->correlative_id_awaiting);
-						t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
+						//t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
+						t->stats->current_activity = NULL;
 
 						t->stats->status = BLOCKED_ACTION;
 						executing_trainer = NULL;

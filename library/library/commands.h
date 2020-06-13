@@ -18,7 +18,7 @@ void _command_broker_get_pokemon(queue_message * data, gameboy_config CONFIG);
 void _command_team_appeared_pokemon(queue_message * data, gameboy_config CONFIG);
 
 void _command_gamecard_new_pokemon(queue_message * data, gameboy_config CONFIG);
-void _command_gamecard_catch_pokemon(queue_message * data, gameboy_config CONFIG);
+void _command_gamecard_catch_pokemon(queue_message * data, int message_id, gameboy_config CONFIG);
 void _command_gamecard_get_pokemon(queue_message * data, gameboy_config CONFIG);
 
 void _command_subscribe_to_queue(_message_queue_name queue, int seconds, gameboy_config CONFIG);

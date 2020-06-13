@@ -90,9 +90,9 @@ void _command_gamecard_new_pokemon(queue_message * data, gameboy_config CONFIG) 
 
 	close_socket(socket);
 }
-void _command_gamecard_catch_pokemon(queue_message * data, gameboy_config CONFIG) {
+void _command_gamecard_catch_pokemon(queue_message * data, int message_id, gameboy_config CONFIG) {
 	int socket = _command_connect_to_gamecard(CONFIG);
-	send_pokemon_message(socket, data, 0, -1);
+	send_pokemon_message_with_id(socket, data, 0, message_id, -1);
 
 	close_socket(socket);
 }

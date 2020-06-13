@@ -11,6 +11,8 @@ pthread_mutex_t directory_operation_mutex;
 int internal_broker_need;
 pthread_mutex_t broker_mutex;
 
+int has_broker_connection = false;
+
 //PROTOTYPES
 int process_pokemon_message(gamecard_thread_payload * payload);
 void setup(int argc, char **argv);
@@ -67,7 +69,12 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 				//TODO Checkear si se guardo el archivo. Sino, quiere decir que otro hilo lo abrió. NO DEBERIA OCURRIR
 
 				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
-				send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
+				log_info(LOGGER, "%d", CONFIG.broker_socket);
+				if(has_broker_connection == true) {
+					send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
+				} else {
+					log_error(LOGGER, "Cannot notify broker");
+				}
 				log_info(LOGGER, "Saved new pokemon location");
 
 			} else {
@@ -97,14 +104,20 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 
 						if(line->quantity == 0) {
 							queue_message * response = caught_pokemon_create(0);
-							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+
+							if(has_broker_connection == true) {
+								send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+							}
 							log_info(LOGGER, "Pokemon caught failed");
 						} else {
 							line->quantity--;
 							tall_grass_save_string_in_file("/Pokemon", chpm->pokemon, serialize_pokemon_file(pf)->content);
 
 							queue_message * response = caught_pokemon_create(1);
-							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+
+							if(has_broker_connection == true) {
+								send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+							}
 							log_info(LOGGER, "Pokemon caught successfully");
 						}
 					}
@@ -115,7 +128,10 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 				default:
 					log_error(LOGGER, "File does not exists or is a directory");
 					queue_message * response = caught_pokemon_create(0);
-					send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+
+					if(has_broker_connection == true) {
+						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+					}
 					break;
 			}
 
@@ -140,7 +156,10 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 							list_add(listaPosiciones, pfl->position);
 						}
 						queue_message * response = localized_pokemon_create(gpm->pokemon, listaPosiciones);
-						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+
+						if(has_broker_connection == true) {
+							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+						}
 					}
 					break;
 				case -1:
@@ -211,6 +230,7 @@ int broker_server_function() {
 			sleep(CONFIG.retry_time_conn);
 		} else {
 			success_listening = success;
+			has_broker_connection = true;
 		}
 	} while (success_listening == failed);
 
