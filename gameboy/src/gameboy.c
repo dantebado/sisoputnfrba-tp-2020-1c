@@ -12,7 +12,6 @@ int main(int argc, char **argv) {
 	setup(argc, argv);
 
 	int test = 0;
-
 	if(test) {
 		char * pokemons[] = { "Bulbasaur", "Ivysaur", "Venusaur", "Charmander", "Charmeleon",
 			"Charizard", "Squirtle", "Wartortle", "Blastoise", "Caterpie", "Metapod", "Butterfree", "Weedle", "Pidgeotto", "Pidgey", "Beedrill", "Kakuna",
@@ -64,6 +63,19 @@ int main(int argc, char **argv) {
 		}
 
 		close_socket(socket);
+	}
+
+	if(argc > 1) {
+		int i = 0;
+		char * full_command = string_new();
+		for(i=1 ; i<argc ; i++) {
+			char * tparam = argv[i];
+			if(strcmp("", full_command) != 0) {
+				string_append(&full_command, " ");
+			}
+			string_append(&full_command, tparam);
+		}
+		execute_full_line(full_command, false, &i, CONFIG);
 	} else {
 		gameboy_console_launcher(CONFIG);
 	}
@@ -85,12 +97,12 @@ int main(int argc, char **argv) {
 
 void setup(int argc, char **argv) {
 	char * log_path = string_new();
-	string_append(&log_path, (argc > 1) ? argv[1] : "gameboy");
+	string_append(&log_path, argc == 1 ? "gameboy" : "./../gameboy");
 	string_append(&log_path, ".log");
-	LOGGER = log_create(log_path, (argc > 1) ? argv[1] : "gameboy", false, LOG_LEVEL_INFO);
+	LOGGER = log_create(log_path, "gameboy", false, LOG_LEVEL_INFO);
 
 	char * cfg_path = string_new();
-	string_append(&cfg_path, (argc > 1) ? argv[1] : "gameboy");
+	string_append(&cfg_path, argc == 1 ? "gameboy" : "./../gameboy");
 	string_append(&cfg_path, ".cfg");
 	_CONFIG = config_create(cfg_path);
 
