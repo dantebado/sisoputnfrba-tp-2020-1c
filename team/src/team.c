@@ -50,7 +50,6 @@ pokemon_requirement * find_requirement_by_pokemon_name(char * name);
 //Trainers
 void block_trainer(trainer * t);
 trainer * closest_free_trainer(int pos_x, int pos_y);
-int is_in_deadlock(trainer * waiting_trainer);
 int circular_chain(t_list * trainers_to_check);
 t_list * find_pokemons_allocators(trainer * myself);
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself);
@@ -60,13 +59,17 @@ bool move_to(trainer * t, int x, int y);
 //Pokemons
 int is_required(char * pokemon);
 void set_required_pokemons();
-
 int is_id_in_list(t_list * list, int value);
-
 void print_current_requirements();
-void compute_deadlocks();
+int requirements_are_finished();
 
+//Deadlock
+void compute_deadlocks(pokemon_allocation * last_allocation);
 bool exists_path_to(trainer * from, trainer * to);
+void solve_deadlock_for(pokemon_allocation * last_allocation);
+int detect_deadlock_from(trainer * root);
+int is_in_deadlock(trainer * t);
+
 
 //Main
 int main(int argc, char **argv) {
@@ -148,7 +151,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 									log_info(LOGGER, "Capture registered successfully");
 									print_current_requirements();
 
-									compute_deadlocks();
+									//compute_deadlocks();
 								}
 
 								ttrainer->stats->status = BLOCKED_ACTION;
@@ -511,10 +514,16 @@ void setup(int argc, char **argv) {
 	}
 
 	//TODO debug de deadlock
-	//log_info(LOGGER, "asdasd");
+
 	//log_info(LOGGER, "%d", exists_path_to( list_get(trainers, 3), list_get(trainers, 2) ));
 
-	pthread_mutex_init(&executing_mutex, NULL);
+	pokemon_allocation * pa;
+	trainer * t = list_get(trainers, 0);
+	pa->allocator_trainer = t;
+	pa->allocated_pokemon = list_get(t->pokemons, 0);
+	compute_deadlocks(pa);
+
+/*	pthread_mutex_init(&executing_mutex, NULL);
 	pthread_mutex_init(&ready_queue_mutex, NULL);
 
 	set_required_pokemons();
@@ -530,7 +539,7 @@ void setup(int argc, char **argv) {
 	pthread_join(exec_thread, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
-	pthread_join(CONFIG.broker_thread, NULL);
+	pthread_join(CONFIG.broker_thread, NULL);*/
 }
 
 void _diff_my_caught_pokemons(trainer * ttrainer){
@@ -548,6 +557,14 @@ void _diff_my_caught_pokemons(trainer * ttrainer){
 			}
 		}
 	}
+}
+
+int requirements_are_finished(){
+	for(int i=0; i<global_requirements->elements_count; i++){
+		pokemon_requirement * req = list_get(global_requirements, i);
+		if(req->total_count - req->total_caught > 0) return false;
+	}
+	return true;
 }
 
 void print_current_requirements() {
@@ -723,9 +740,15 @@ void executing(trainer * t){
 				break;
 			case AWAITING_CAPTURE_RESULT: ;
 				//Aca el entrenador espera recibir el mensaje del catch que envio
-				//Luego si el resultado es positivo, se computan los deadlocks
+				//creamos una nueva locacion de pokemon con este entrenador y el pokemon atrapado
+				//pokemon_allocation * pa;
+				//pa->trainer = trainer;
+				//pa->pokemon = captured_pokemon
+				//El deadlock lo chequearemos cuando se hayan capturado todos los pokemones que el team necesita
+				//if(requirements_are_finished)....
 				break;
 			case TRADING: ;
+				//Por que data??
 				trainer * trading_trainer = t->stats->current_activity->data;
 				log_info(LOGGER, "\tIs trading with %d at %d %d",
 											trading_trainer->id, trading_trainer->x, trading_trainer->y);
@@ -852,6 +875,7 @@ t_list * find_pokemons_allocators(trainer * myself){
 	return trainers_got_one_of_my_pokemons;
 }
 
+//NO SE USA
 int circular_chain(t_list * trainers_to_check){
 	int i = 0;
 	trainer * head_trainer = list_get(trainers_to_check, 0);
@@ -867,16 +891,6 @@ int circular_chain(t_list * trainers_to_check){
 	}while(cycle_trainer->id != head_trainer->id);
 
 	return true;
-}
-
-//NO VA
-int is_in_deadlock(trainer * waiting_trainer){
-	t_list * possible_deadlocked_trainers;
-	possible_deadlocked_trainers = list_create();
-
-	possible_deadlocked_trainers =	find_pokemons_allocators(waiting_trainer);
-
-	return circular_chain(possible_deadlocked_trainers);
 }
 
 bool exists_path_to(trainer * from, trainer * to) {
@@ -895,6 +909,7 @@ bool exists_path_to(trainer * from, trainer * to) {
 	return any_is;
 }
 
+//NO SE USA
 void compute_path_to(trainer * start, trainer * target, t_list * paths, t_list * tpath) {
 	int i, j;
 
@@ -917,25 +932,66 @@ void compute_path_to(trainer * start, trainer * target, t_list * paths, t_list *
 	}
 }
 
-void compute_deadlocks() {
-	int i, j;
+int is_in_deadlock(trainer * t){
+	return t->stats->status == DEADLOCK_ACTION;
+}
 
-	for(i=0 ; i<trainers->elements_count ; i++) {
-		trainer * ttrainer = list_get(trainers, i);
-		//t_list * tspares = spare_pokemons(ttrainer);
-		//t_list * need_my_resource = in_need_of_a_spare(tspares, ttrainer);
+int detect_deadlock_from(trainer * root){
+	if(is_trainer_completed(root)) return false;
 
-		trainer * color = ttrainer;
+	t_list * base_list = find_pokemons_allocators(root);
+	if(list_size(base_list) == 0) return false;
 
-		t_list * root_nodes;
-		root_nodes = find_pokemons_allocators(ttrainer);
-
-		for(j=0 ; j<root_nodes->elements_count ; j++) {
-			trainer * root_trainer = list_get(root_nodes, j);
-			t_list * my_allocators = find_pokemons_allocators(root_trainer);
+	trainer * t;
+	for(int i=0; i<base_list->elements_count; i++){
+		t = list_get(base_list, i);
+		if(exists_path_to(t, root)){
+			root->stats->status = DEADLOCK_ACTION; //Estoy cambiando el entrenador que quiero??
+			return true;
 		}
 	}
+	return false;
+}
 
+void solve_deadlock_for(pokemon_allocation * last_allocation){
+	for(int i=0; i<last_allocation->allocator_trainer->pokemons->elements_count; i++){
+		char * p = list_get(last_allocation->allocator_trainer->pokemons, i);
+		for(int j=0; j<trainers->elements_count; j++){
+			trainer * ttrainer = list_get(trainers, j);
+			char * tmp_pokemon = list_get(ttrainer->targets, i);
+			for(int k=0; k<ttrainer->targets->elements_count; k++){
+				/* El pokemon del entrenador que estas recorriendo es igual a uno de los pokemons
+				 * del entrenador que hizo la ultima asignacion
+				 * Y
+				 * El entrenador que estas recorriendo es distinto al que hizo la ultima asignacion
+				 * Y
+				 * El pokemon del entrenador que hizo la ultima asignacion es igual al pokemon
+				 * de la ultima asignacion
+				 */
+				if(strcmp(tmp_pokemon, p) == 0 &&
+						ttrainer->id != last_allocation->allocator_trainer->id &&
+						strcmp(p, last_allocation->allocated_pokemon) == 0){
+					block_trainer(last_allocation->allocator_trainer);
+					ttrainer->stats->current_activity = TRADING;
+				}
+			}
+		}
+	}
+}
+
+void compute_deadlocks(pokemon_allocation * last_allocation) {
+	trainer * t;
+
+	for(int i=0 ; i<trainers->elements_count ; i++) {
+		t = list_get(trainers, i);
+		if(is_in_deadlock(t)){
+			log_info(LOGGER, "Deadlock found!! 1");
+			solve_deadlock_for(last_allocation);
+		}else if(detect_deadlock_from(t)){
+			log_info(LOGGER, "Deadlock found!! 2");
+			solve_deadlock_for(last_allocation);
+		}
+	}
 }
 
 
