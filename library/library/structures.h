@@ -247,6 +247,7 @@ typedef enum{
 	READY_ACTION,
 	EXEC_ACTION,
 	BLOCKED_ACTION,
+	DEADLOCK_ACTION,
 	EXIT_ACTION
 } trainer_action_status;
 
@@ -287,6 +288,11 @@ typedef struct {
 
 	trainer_action * stats;
 } trainer __attribute__((packed));
+
+typedef struct{
+	trainer * allocator_trainer;
+	char * allocated_pokemon;
+} pokemon_allocation;
 
 typedef struct{
 	int global_cpu_counter;
