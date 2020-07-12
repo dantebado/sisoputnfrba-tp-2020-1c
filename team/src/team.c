@@ -58,7 +58,7 @@ pokemon_requirement * find_requirement_by_pokemon_name(char * name);
 void block_trainer(trainer * t);
 trainer * closest_free_trainer(int pos_x, int pos_y);
 void detect_circular_chains();
-t_list * find_pokemons_allocators(trainer * myself);
+t_list * find_pokemons_allocators(trainer * myself, t_list * tg);
 int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself);
 int need_that_pokemon(trainer * myself, char * suspected_pokemon);
 bool move_to(trainer * t, int x, int y);
@@ -71,16 +71,15 @@ void print_current_requirements();
 int requirements_are_finished();
 
 //Deadlock
-int compute_deadlocks();
-int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * steps);
+int compute_deadlocks(t_list * tg);
+int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * tg, t_list * steps);
 void solve_deadlock_for();
-int detect_deadlock_from(trainer * root);
+int detect_deadlock_from(trainer * root, t_list * tg);
 int is_in_deadlock(trainer * t);
 
-void build_lists();
 t_list * all_possible_combinations(t_list * all_trainers);
 t_list * all_combinations_of_size(t_list * all_trainers, int size);
-void combinations(t_list * all_trainers, int length, int start_position,
+void combinations(t_list * all_trainers, int, int length, int start_position,
 		t_list * current_result, t_list * all_results);
 
 
@@ -525,20 +524,21 @@ void setup(int argc, char **argv) {
 			log_info(LOGGER, "Trainer %d @ [%d - %d]", t->id, t->x, t->y);
 		}
 	}
+	deadlock_groups = all_possible_combinations(trainers);
+	/*int i, j;
+	for(i=0 ; i<deadlock_groups->elements_count ; i++) {
+		t_list * group = list_get(deadlock_groups, i);
+		log_info(LOGGER, "Groupo %d", i);
+		for(j=0 ; j<group->elements_count ; j++) {
+			trainer * t = list_get(group, j);
+			log_info(LOGGER, "\t%d", t->id);
+		}
+	}*/
 
 	//TODO debug de deadlock
+	//detect_circular_chains();
 
-	pokemon_allocation * pa = malloc(sizeof(pokemon_allocation));
-	trainer * t = list_get(trainers, 0);
-	pa->allocator_trainer = t;
-	pa->allocated_pokemon = list_get(t->pokemons, 0);
-	log_info(LOGGER, "0");
-
-	deadlock_groups = list_create();
-	build_lists();
-	log_info(LOGGER, "20");
-	log_info(LOGGER, "%d", deadlock_groups->elements_count);
-	detect_circular_chains();
+	while(1) {}
 
 /*	pthread_mutex_init(&executing_mutex, NULL);
 	pthread_mutex_init(&ready_queue_mutex, NULL);
@@ -877,11 +877,11 @@ int got_one_of_my_pokemons(trainer * suspected_trainer, trainer * myself){
 	return (list_find(myself->targets, (void*) _matches_my_pokemons) != NULL ? true : false);
 }
 
-t_list * find_pokemons_allocators(trainer * myself){
+t_list * find_pokemons_allocators(trainer * myself, t_list * tg){
 	t_list * trainers_got_one_of_my_pokemons = list_create();
 
 	int i = 0;
-	trainer * a_trainer = list_get(trainers, i);
+	trainer * a_trainer = list_get(tg, i);
 
 	while(a_trainer != NULL){
 		if(a_trainer->id != myself->id) {
@@ -890,7 +890,7 @@ t_list * find_pokemons_allocators(trainer * myself){
 			}
 		}
 		i++;
-		a_trainer = list_get(trainers, i);
+		a_trainer = list_get(tg, i);
 	}
 
 	return trainers_got_one_of_my_pokemons;
@@ -901,43 +901,49 @@ void list_replace_in_index(t_list * list, void * element, int index){
 	list_remove(list, index + 1);
 }
 
-void combinations(t_list * all_trainers, int length, int start_position,
+t_list * clone_list(t_list * source) {
+	t_list * list = list_create();
+	int i;
+	for(i=0 ; i<source->elements_count ; i++) {
+		list_add(list, list_get(source, i));
+	}
+	return list;
+}
+
+void combinations(t_list * all_trainers, int original_length, int length, int start_position,
 		t_list * current_result, t_list * all_results){
 
 	//list_clone de java
 	if(length == 0){
-		for(int i=0; i<current_result->elements_count; i++){
-			list_add(all_results, list_get(current_result, i));
-		}
+		t_list * cloned = clone_list(current_result);
+		list_add(all_results, cloned);
 		return;
 	}
 
 	for(int i=start_position; i<=all_trainers->elements_count - length; i++){
 		trainer * ttrainer = list_get(all_trainers, i);
 
-		for(int j=0; j<current_result->elements_count; j++){
-			if(j == current_result->elements_count - length){
-				list_replace_in_index(current_result, ttrainer, current_result->elements_count - length);
-			}
+		if(current_result->elements_count > original_length - length) {
+			list_replace_in_index(current_result, ttrainer, original_length - length);
+		} else {
+			list_add(current_result, ttrainer);
 		}
-		combinations(all_trainers, length-1, i+1, current_result, all_results);
+
+		combinations(all_trainers, original_length, length-1, i+1, current_result, all_results);
 	}
 }
 
 t_list * all_combinations_of_size(t_list * all_trainers, int size){
 	t_list * all_results_of_size = list_create();
 	t_list * trainers_of_size = list_create();
-	log_info(LOGGER, "12");
 
-	combinations(all_trainers, size, 0, trainers_of_size, all_results_of_size);
-	log_info(LOGGER, "13");
+	combinations(all_trainers, size, size, 0, trainers_of_size, all_results_of_size);
 
 	return all_results_of_size;
 }
 
 t_list * all_possible_combinations(t_list * all_trainers){
 	t_list * final_result = list_create();
-	log_info(LOGGER, "11");
 
 	for(int i=2; i<=all_trainers->elements_count; i++){
 		t_list * partial_result = list_create();
@@ -946,45 +952,18 @@ t_list * all_possible_combinations(t_list * all_trainers){
 		for(int j=0; j<partial_result->elements_count; j++){
 			list_add(final_result, list_get(partial_result, j));
 		}
-
 	}
-	log_info(LOGGER, "14");
 
 	return final_result;
 }
 
-void build_lists(){
-	t_list * all_trainers = list_create();
-
-	//list_clone de java
-	for(int i=0; i<trainers->elements_count; i++){
-		list_add(all_trainers, list_get(trainers, i));
-	}
-
-	log_info(LOGGER, "10");
-	all_trainers = all_possible_combinations(all_trainers);
-
-	for(int i=0; i<all_trainers->elements_count; i++){
-		t_list * this_list = list_get(all_trainers, i);
-		t_list * this_result_as_list = list_create();
-
-		for(int j=0; j<this_list->elements_count; j++){
-			trainer * ttrainer = list_get(this_list, j);
-			list_add(this_result_as_list, ttrainer);
-		}
-		list_add(deadlock_groups, this_result_as_list);
-	}
-	log_info(LOGGER, "15");
-
-}
-
-int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * steps) {
+int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * tg, t_list * steps) {
 	if(from->id == to->id) return true;
 
 	t_list * base_list;
 	trainer * ttrainer;
 
-	base_list = find_pokemons_allocators(from);
+	base_list = find_pokemons_allocators(from, tg);
 
 	if(list_size(base_list) == 0) return false;
 
@@ -999,11 +978,11 @@ int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * steps
 	for(int i=0; i<base_list->elements_count; i++){
 		ttrainer = list_get(base_list, i);
 
-		if(from->id == ttrainer->id) return true;
+		if(to->id == ttrainer->id) return true;
 
 		if(ttrainer->id != first->id && !list_contains(steps, ttrainer)){
 			list_add(steps, ttrainer);
-			if(exists_path_to(first, ttrainer, to, steps)) return true;
+			if(exists_path_to(first, ttrainer, to, tg, steps)) return true;
 		}
 	}
 	return false;
@@ -1018,22 +997,22 @@ void detect_circular_chains(){
 
 			for(int j=1; j<tg->elements_count; j++){
 				t_list * aux_trainer_list = list_create();
-				if(!exists_path_to(list_get(tg, i), list_get(tg, i), list_get(tg, 0), aux_trainer_list)){
+				if(!exists_path_to(list_get(tg, j), list_get(tg, j), list_get(tg, 0), tg, aux_trainer_list)){
 					is_in_deadlock = false;
 				}
 
 				t_list * another_aux_trainer_list = list_create();
-				if(!exists_path_to(list_get(tg, 0), list_get(tg, 0), list_get(tg, i), another_aux_trainer_list)){
+				if(!exists_path_to(list_get(tg, 0), list_get(tg, 0), list_get(tg, j), tg, another_aux_trainer_list)){
 					is_in_deadlock = false;
 				}
 			}
 
 			if(is_in_deadlock){
-				log_info(LOGGER, "Deadlocks found!!");
+				log_info(LOGGER, "Deadlock en grupo %d", i);
 
 				for(int j=0; j<tg->elements_count; j++){
 					trainer * ttrainer = list_get(tg, j);
-					log_info(LOGGER, "%d", ttrainer->id);
+					log_info(LOGGER, "\t%d", ttrainer->id);
 				}
 			}
 		}
@@ -1044,19 +1023,16 @@ int is_in_deadlock(trainer * t){
 	return t->stats->status == DEADLOCK_ACTION;
 }
 
-int detect_deadlock_from(trainer * root){
+int detect_deadlock_from(trainer * root, t_list * tg){
 	if(is_trainer_completed(root)) return false;
 
-	t_list * base_list = find_pokemons_allocators(root);
+	t_list * base_list = find_pokemons_allocators(root, tg);
 	if(list_size(base_list) == 0) return false;
 
-	log_info(LOGGER, "2");
 	for(int i=0; i<base_list->elements_count; i++){
 		trainer * t = list_get(base_list, i);
 		t_list * trainer_steps = list_create();
-		if(exists_path_to(root, t, root, trainer_steps)){
-			log_info(LOGGER, "3");
-
+		if(exists_path_to(root, t, root, tg, trainer_steps)){
 			//TODO poner el trade
 			//Iria el llamado a solve_deadlock_for
 
@@ -1120,10 +1096,6 @@ void solve_deadlock_for(){
 	} */
 }
 
-int compute_deadlocks() {
-	log_info(LOGGER, "1");
-	if(detect_deadlock_from(list_get(trainers, 0))) return true;
-	else return false;
+int compute_deadlocks(t_list * tg) {
+	return detect_deadlock_from(list_get(tg, 0), tg);
 }
-
-
