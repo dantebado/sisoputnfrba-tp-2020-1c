@@ -1,4 +1,5 @@
 #include <library/library.h>
+#include <signal.h>
 
 /*/
  *
@@ -45,7 +46,7 @@ memory_partition * get_partitions_available_partition_by_size(int get_partitions
 memory_partition * find_partition_starting_in(int partition_start);
 memory_partition * partition_create(int number, int size, void * start, broker_message * message);
 void print_partitions_info();
-void print_partition_info(memory_partition * partition);
+void print_partition_info(int n, memory_partition * partition);
 void free_memory_partition(memory_partition * partition);
 memory_partition * write_payload_to_memory(int payload_size, void * payload);
 void compact_memory(int already_reserved_mutex);
@@ -80,6 +81,9 @@ int destroy_unserialized(void * payload, pokemon_message_type type);
 //CLIENTS
 int is_same_client(client * c1, client * c2);
 client * add_or_get_client(int socket, char * ip, int port);
+
+//SIGNAL
+void my_handler(int signum);
 
 int main(int argc, char **argv) {
 
@@ -123,13 +127,15 @@ void setup(int argc, char **argv) {
 		CONFIG.seek_alg = BEST_FIT;
 	}
 
+	signal(SIGUSR1, my_handler);
+
 	//custom_print("Dante gato %d", CONFIG.memory_size);
 
 	init_memory();
 
 	last_message_id = 0;
 
-	log_info(LOGGER, "Configuration loaded");
+	//DEBUG_LOGlog_info(LOGGER, "Configuration loaded");
 
 	clients = list_create();
 	pthread_mutex_init(&clients_mutex, NULL);
@@ -146,6 +152,8 @@ void setup(int argc, char **argv) {
 	init_queue(QUEUE_GET_POKEMON);
 	init_queue(QUEUE_LOCALIZED_POKEMON);
 
+	print_partitions_info();
+
 	CONFIG.internal_socket = create_socket();
 	bind_socket(CONFIG.internal_socket, CONFIG.broker_port);
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
@@ -159,10 +167,9 @@ void setup(int argc, char **argv) {
  * */
 
 void init_memory() {
-	log_info(LOGGER, "Initializing Memory of %d bytes", CONFIG.memory_size);
-	log_info(LOGGER, "Min partition size %d bytes", CONFIG.partition_min_size);
-	log_info(LOGGER, "%s, with %s replacement and %s seeking", enum_to_memory_alg(CONFIG.memory_alg),
-			enum_to_memory_replacement_alg(CONFIG.remplacement_alg), enum_to_memory_selection_alg(CONFIG.seek_alg));
+	//DEBUG_LOGlog_info(LOGGER, "Initializing Memory of %d bytes", CONFIG.memory_size);
+	//DEBUG_LOGlog_info(LOGGER, "Min partition size %d bytes", CONFIG.partition_min_size);
+	//DEBUG_LOGlog_info(LOGGER, "%s, with %s replacement and %s seeking", enum_to_memory_alg(CONFIG.memory_alg), enum_to_memory_replacement_alg(CONFIG.remplacement_alg), enum_to_memory_selection_alg(CONFIG.seek_alg));
 
 	pthread_mutex_init(&time_counter_mutex, NULL);
 	time_counter = 0;
@@ -220,7 +227,7 @@ memory_partition * get_available_partition_by_payload_size(int payload_size) {
 		partition_size = closest_bs_size(payload_size);
 	}
 	if(partition_size > CONFIG.memory_size) {
-		log_error(LOGGER, "Data is too big for this memory");
+		//DEBUG_LOGlog_error(LOGGER, "Data is too big for this memory");
 		return NULL;
 	}
 	switch(CONFIG.memory_alg) {
@@ -268,7 +275,7 @@ memory_partition * get_bs_available_partition_by_size(int partition_size) {
 		}
 	}
 
-	log_info(LOGGER, "Cannot find right partition. Compacting...");
+	//DEBUG_LOGlog_info(LOGGER, "Cannot find right partition. Compacting...");
 	compact_memory(false);
 
 	for(i=0 ; i<partitions->elements_count ; i++) {
@@ -281,7 +288,7 @@ memory_partition * get_bs_available_partition_by_size(int partition_size) {
 		}
 	}
 
-	log_error(LOGGER, "There is no free space in memory. Removing a partition.");
+	//DEBUG_LOGlog_error(LOGGER, "There is no free space in memory. Removing a partition.");
 	remove_a_partition();
 	return get_bs_available_partition_by_size(partition_size);
 }
@@ -352,7 +359,7 @@ memory_partition * get_partitions_available_partition_by_size(int partition_size
 		return ret;
 	}
 
-	log_error(LOGGER, "No suitable partition. Compacting...");
+	//DEBUG_LOGlog_error(LOGGER, "No suitable partition. Compacting...");
 	compact_memory(false);
 
 	ret = get_partitions_available_by_alg(partition_size);
@@ -360,7 +367,7 @@ memory_partition * get_partitions_available_partition_by_size(int partition_size
 		return ret;
 	}
 
-	log_error(LOGGER, "No results. Must remove a partition...");
+	//DEBUG_LOGlog_error(LOGGER, "No results. Must remove a partition...");
 	remove_a_partition();
 	return get_partitions_available_partition_by_size(partition_size);
 }
@@ -389,23 +396,18 @@ memory_partition * partition_create(int number, int size, void * start, broker_m
 }
 void print_partitions_info() {
 	int i;
-	log_info(LOGGER, "START PARTIITON DATA");
-
+	log_info(LOGGER, "-------------------------------------------------------");
+	log_info(LOGGER, "::DUMP::");
 	for(i=0 ; i<partitions->elements_count ; i++) {
 		memory_partition * partition = list_get(partitions, i);
-		print_partition_info(partition);
+		print_partition_info(i, partition);
 	}
-
-	log_info(LOGGER, "END  PARTIITON  DATA");
+	log_info(LOGGER, "-------------------------------------------------------");
 }
-void print_partition_info(memory_partition * partition) {
-	log_info(LOGGER, "\t\t%d @ %d SIZE %d Bytes, Free %d LA %d @ %d - %d",
-			partition->number,
-			partition->partition_start - main_memory,
-			partition->partition_size, partition->is_free,
-			partition->access_time,
-			partition->partition_start,
-			partition->partition_start + partition->partition_size);
+void print_partition_info(int n, memory_partition * partition) {
+	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db",
+			n, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
+			partition->is_free ? 'X' : 'F', partition->partition_size);
 }
 void free_memory_partition(memory_partition * partition) {
 	message_queue * queue = find_queue_by_name(partition->message->message->header->queue);
@@ -437,7 +439,7 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 	memory_partition * the_partition = get_available_partition_by_payload_size(payload_size);
 
 	if(the_partition == NULL) {
-		log_error(LOGGER, "Data has not been written");
+		//DEBUG_LOGlog_error(LOGGER, "Data has not been written");
 	} else {
 		the_partition->is_free = false;
 		the_partition->free_size = the_partition->partition_size - payload_size;
@@ -532,7 +534,7 @@ void compact_memory(int already_reserved_mutex) {
 	if(!already_reserved_mutex){
 		pthread_mutex_unlock(&memory_access_mutex);
 	}
-	log_info(LOGGER, "Memory has been compacted");
+	//DEBUG_LOGlog_info(LOGGER, "Memory has been compacted");
 }
 void remove_a_partition() {
 	int i;
@@ -562,9 +564,9 @@ void remove_a_partition() {
 			break;
 	}
 	if(to_remove == NULL) {
-		log_info(LOGGER, "No partition to remove");
+		//DEBUG_LOGlog_info(LOGGER, "No partition to remove");
 	} else {
-		log_info(LOGGER, "Removing partition %d", to_remove->number);
+		//DEBUG_LOGlog_info(LOGGER, "Removing partition %d", to_remove->number);
 	}
 	free_memory_partition(to_remove);
 }
@@ -596,7 +598,7 @@ void init_queue(_message_queue_name name) {
 
 	pthread_create(&queue->thread, NULL, queue_thread_function, queue);
 
-	log_info(LOGGER, "Created List %s & Server Started", enum_to_queue_name(name));
+	//DEBUG_LOGlog_info(LOGGER, "Created List %s & Server Started", enum_to_queue_name(name));
 }
 message_queue * find_queue_by_name(_message_queue_name name) {
 	int i;
@@ -641,24 +643,20 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	final_message->message->payload = partition;
 	final_message->payload_address_copy = partition;
 
-	log_info(LOGGER, "Adding message %d to queue %s with correlative %d", message->header->message_id, enum_to_queue_name(queue_name), message->header->correlative_id);
+	//DEBUG_LOGlog_info(LOGGER, "Adding message %d to queue %s with correlative %d", message->header->message_id, enum_to_queue_name(queue_name), message->header->correlative_id);
 	pthread_mutex_lock(&queue->mutex);
 	pthread_mutex_lock(&messages_index_mutex);
 	list_add(queue->messages, final_message);
 	list_add(messages_index, final_message);
 	pthread_mutex_unlock(&messages_index_mutex);
 	pthread_mutex_unlock(&queue->mutex);
-	log_info(LOGGER, "\t\tAdded");
+	//DEBUG_LOGlog_info(LOGGER, "\t\tAdded");
 	return OPT_OK;
 }
 void queue_thread_function(message_queue * queue) {
 	int i, j;
 	while(1) {
 		pthread_mutex_lock(&queue->mutex);
-	/*	log_info(LOGGER, "Queue %d has %d messages and %d suscriptors",
-				queue->name,
-				queue->messages->elements_count,
-				queue->subscribers->elements_count);	*/
 		for(i=0 ; i<queue->messages->elements_count ; i++) {
 			broker_message * tmessage = list_get(queue->messages, i);
 
@@ -673,9 +671,7 @@ void queue_thread_function(message_queue * queue) {
 
 				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber)) {
 
-					log_info(LOGGER, "Sending MID %d, to socket %d",
-							tmessage->message->header->message_id,
-							tsubscriber->socket);
+					//DEBUG_LOGlog_info(LOGGER, "Sending MID %d, to socket %d", tmessage->message->header->message_id, tsubscriber->socket);
 
 					pthread_mutex_lock(&tsubscriber->mutex);
 					send_pokemon_message_with_id(tsubscriber->socket, tmessage->message, 0,
@@ -705,7 +701,7 @@ void queue_thread_function(message_queue * queue) {
  * */
 
 int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name) {
-	log_info(LOGGER, "Socket %d subscribing to queue %d", socket, queue_name);
+	//DEBUG_LOGlog_info(LOGGER, "Socket %d subscribing to queue %d", socket, queue_name);
 
 	client * sub = add_or_get_client(socket, ip, port);
 
@@ -715,13 +711,13 @@ int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_na
 		list_add(queue->subscribers, sub);
 		pthread_mutex_unlock(&queue->mutex);
 
-		log_info(LOGGER, "Subscription successful");
+		//DEBUG_LOGlog_info(LOGGER, "Subscription successful");
 		pthread_mutex_lock(&sub->mutex);
 		send_int(socket, OPT_OK);
 		pthread_mutex_unlock(&sub->mutex);
 		return OPT_OK;
 	} else {
-		log_info(LOGGER, "Cannot find queue %d", queue_name);
+		//DEBUG_LOGlog_info(LOGGER, "Cannot find queue %d", queue_name);
 		pthread_mutex_lock(&sub->mutex);
 		send_int(socket, OPT_FAILED);
 		pthread_mutex_unlock(&sub->mutex);
@@ -729,7 +725,7 @@ int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_na
 	}
 }
 int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name) {
-	log_info(LOGGER, "Socket %d unsubscribing from queue %d", socket, queue_name);
+	//DEBUG_LOGlog_info(LOGGER, "Socket %d unsubscribing from queue %d", socket, queue_name);
 
 	message_queue * queue = find_queue_by_name(queue_name);
 	client * tc = add_or_get_client(socket, ip, port);
@@ -746,20 +742,20 @@ int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queu
 		}
 		pthread_mutex_unlock(&queue->mutex);
 		if(r == 0) {
-			log_info(LOGGER, "Unsubscription failed");
+			//DEBUG_LOGlog_info(LOGGER, "Unsubscription failed");
 			pthread_mutex_lock(&tc->mutex);
 			send_int(socket, OPT_FAILED);
 			pthread_mutex_unlock(&tc->mutex);
 			return OPT_FAILED;
 		} else {
-			log_info(LOGGER, "Unsubscription successful");
+			//DEBUG_LOGlog_info(LOGGER, "Unsubscription successful");
 			pthread_mutex_lock(&tc->mutex);
 			send_int(socket, OPT_OK);
 			pthread_mutex_unlock(&tc->mutex);
 			return OPT_OK;
 		}
 	} else {
-		log_info(LOGGER, "Cannot find queue %d", queue_name);
+		//DEBUG_LOGlog_info(LOGGER, "Cannot find queue %d", queue_name);
 		pthread_mutex_lock(&tc->mutex);
 		send_int(socket, OPT_FAILED);
 		pthread_mutex_unlock(&tc->mutex);
@@ -1030,12 +1026,12 @@ void * deserialize_message_payload(void * payload, pokemon_message_type type) {
  * */
 
 int server_function(int socket) {
-	log_info(LOGGER, "Server Started");
+	//DEBUG_LOGlog_info(LOGGER, "Server Started");
 	void new(int fd, char * ip, int port) {
 	}
 
 	void lost(int fd, char * ip, int port) {
-		client * corr_client = add_or_get_client(fd, ip, port);
+		//client * corr_client = add_or_get_client(fd, ip, port);
 		//unsubscribe_socket_from_all_queues(fd, ip, port);
 	}
 
@@ -1062,21 +1058,21 @@ int server_function(int socket) {
 					pthread_mutex_lock(&from->mutex);
 					send_int(fd, message_id);
 
-					log_info(LOGGER, "Incoming message from socket %d", fd);
+					//DEBUG_LOGlog_info(LOGGER, "Incoming message from socket %d", fd);
 
 					queue_message * message = receive_pokemon_message(fd);
 
 					if(message->header->message_id == message_id) {
-						log_info(LOGGER, "Assigned MID %d", message->header->message_id);
+						//DEBUG_LOGlog_info(LOGGER, "Assigned MID %d", message->header->message_id);
 					} else {
-						log_info(LOGGER, "With preassigned MID %d", message->header->message_id);
+						//DEBUG_LOGlog_info(LOGGER, "With preassigned MID %d", message->header->message_id);
 					}
 
 					print_pokemon_message(message);
 					if(add_message_to_queue(message, message->header->queue) == OPT_OK) {
 
 					} else {
-						log_error(LOGGER, "Error adding message %d to queue", message->header->message_id);
+						//DEBUG_LOGlog_error(LOGGER, "Error adding message %d to queue", message->header->message_id);
 					}
 					pthread_mutex_unlock(&from->mutex);
 				}
@@ -1084,6 +1080,9 @@ int server_function(int socket) {
 			case MESSAGE_ACK:;
 				int message_id = recv_int(fd);
 				acknowledge_message(fd, ip, port, message_id);
+				break;
+			case OPT_FAILED:
+			case OPT_OK:
 				break;
 		}
 	}
@@ -1102,16 +1101,15 @@ int generate_message_id() {
 	return last_message_id++;
 }
 int acknowledge_message(int socket, char * ip, int port, int message_id) {
-	log_info(LOGGER, "Socket %d acknowledged message %d", socket, message_id);
+	//DEBUG_LOGlog_info(LOGGER, "Socket %d acknowledged message %d", socket, message_id);
 	client * from = add_or_get_client(socket, ip, port);
 
-	int i, index_i;
+	int i;
 	for(i=0 ; i<messages_index->elements_count ; i++) {
 		broker_message * message = list_get(messages_index, i);
 		if(message->message->header->message_id == message_id) {
 			list_add(message->already_acknowledged, from);
 
-			index_i = i;
 			message_queue * queue = find_queue_by_name(message->message->header->queue);
 
 			if(message->already_acknowledged->elements_count ==
@@ -1209,4 +1207,15 @@ client * add_or_get_client(int socket, char * ip, int port) {
 	list_add(clients, c);
 	pthread_mutex_unlock(&clients_mutex);
 	return c;
+}
+
+/*
+ *
+ * SIGNAL *
+ *
+ * */
+void my_handler(int signum) {
+    if (signum == SIGUSR1) {
+        print_partitions_info();
+    }
 }

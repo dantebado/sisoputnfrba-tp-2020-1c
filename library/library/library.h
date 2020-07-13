@@ -26,6 +26,7 @@
 #include <sys/syscall.h>
 #include <semaphore.h>
 #include <pthread.h>
+#include <arpa/inet.h>
 
 #include "structures.h"
 #include "functions.h"

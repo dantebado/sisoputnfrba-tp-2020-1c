@@ -296,6 +296,8 @@ int start_server(int socket,
 			}
 		}
 	}
+
+	return 0;
 }
 
 

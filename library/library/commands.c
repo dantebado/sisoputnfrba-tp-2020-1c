@@ -109,13 +109,13 @@ void _command_subscribe_to_queue(_message_queue_name queue, int seconds, gameboy
 		return;
 	}
 	int reading = 1;
-	void * await(int seconds) {
+	void * await() {
 		sleep(seconds);
 		reading = 0;
 		return NULL;
 	}
 	pthread_t awaiting_thread;
-	pthread_create(&awaiting_thread, NULL, await, seconds);
+	pthread_create(&awaiting_thread, NULL, await, NULL);
 
 	int broker_socket = _command_connect_to_broker(CONFIG);
 	subscribe_to_queue(broker_socket, queue);
@@ -132,6 +132,7 @@ void _command_subscribe_to_queue(_message_queue_name queue, int seconds, gameboy
 			print_pokemon_message_by_printf(message);
 			printf("\n");
 		}
+		return NULL;
 	}
 	pthread_t listening_thread;
 	pthread_create(&listening_thread, NULL, listen, NULL);
