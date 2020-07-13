@@ -120,7 +120,7 @@ typedef struct {
 	_seek_alg seek_alg;
 	char * broker_ip;
 	int broker_port;
-	int compating_freq;
+	int compacting_freq;
 	char * log_file;
 
 	int internal_socket;

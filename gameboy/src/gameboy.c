@@ -11,7 +11,7 @@ void setup(int argc, char **argv);
 int main(int argc, char **argv) {
 	setup(argc, argv);
 
-	int test = 0;
+	int test = 1;
 	if(test) {
 		char * pokemons[] = { "Bulbasaur", "Ivysaur", "Venusaur", "Charmander", "Charmeleon",
 			"Charizard", "Squirtle", "Wartortle", "Blastoise", "Caterpie", "Metapod", "Butterfree", "Weedle", "Pidgeotto", "Pidgey", "Beedrill", "Kakuna",

@@ -110,7 +110,7 @@ void setup(int argc, char **argv) {
 	CONFIG.partition_min_size = config_get_int_value(_CONFIG, "TAMANO_MINIMO_PARTICION");
 	CONFIG.broker_ip = config_get_string_value(_CONFIG, "IP_BROKER");
 	CONFIG.broker_port = config_get_int_value(_CONFIG, "PUERTO_BROKER");
-	CONFIG.compating_freq = config_get_int_value(_CONFIG, "FRECUENCIA_COMPACTACION");
+	CONFIG.compacting_freq = config_get_int_value(_CONFIG, "FRECUENCIA_COMPACTACION");
 	if(strcmp("PARTICIONES", config_get_string_value(_CONFIG, "ALGORITMO_MEMORIA")) == 0) {
 		CONFIG.memory_alg = PARTITIONS;
 	} else {
@@ -129,13 +129,9 @@ void setup(int argc, char **argv) {
 
 	signal(SIGUSR1, my_handler);
 
-	//custom_print("Dante gato %d", CONFIG.memory_size);
-
 	init_memory();
 
 	last_message_id = 0;
-
-	//DEBUG_LOGlog_info(LOGGER, "Configuration loaded");
 
 	clients = list_create();
 	pthread_mutex_init(&clients_mutex, NULL);
@@ -152,8 +148,6 @@ void setup(int argc, char **argv) {
 	init_queue(QUEUE_GET_POKEMON);
 	init_queue(QUEUE_LOCALIZED_POKEMON);
 
-	print_partitions_info();
-
 	CONFIG.internal_socket = create_socket();
 	bind_socket(CONFIG.internal_socket, CONFIG.broker_port);
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
@@ -167,10 +161,6 @@ void setup(int argc, char **argv) {
  * */
 
 void init_memory() {
-	//DEBUG_LOGlog_info(LOGGER, "Initializing Memory of %d bytes", CONFIG.memory_size);
-	//DEBUG_LOGlog_info(LOGGER, "Min partition size %d bytes", CONFIG.partition_min_size);
-	//DEBUG_LOGlog_info(LOGGER, "%s, with %s replacement and %s seeking", enum_to_memory_alg(CONFIG.memory_alg), enum_to_memory_replacement_alg(CONFIG.remplacement_alg), enum_to_memory_selection_alg(CONFIG.seek_alg));
-
 	pthread_mutex_init(&time_counter_mutex, NULL);
 	time_counter = 0;
 	partitions = list_create();
@@ -227,7 +217,6 @@ memory_partition * get_available_partition_by_payload_size(int payload_size) {
 		partition_size = closest_bs_size(payload_size);
 	}
 	if(partition_size > CONFIG.memory_size) {
-		//DEBUG_LOGlog_error(LOGGER, "Data is too big for this memory");
 		return NULL;
 	}
 	switch(CONFIG.memory_alg) {
@@ -275,7 +264,6 @@ memory_partition * get_bs_available_partition_by_size(int partition_size) {
 		}
 	}
 
-	//DEBUG_LOGlog_info(LOGGER, "Cannot find right partition. Compacting...");
 	compact_memory(false);
 
 	for(i=0 ; i<partitions->elements_count ; i++) {
@@ -288,7 +276,6 @@ memory_partition * get_bs_available_partition_by_size(int partition_size) {
 		}
 	}
 
-	//DEBUG_LOGlog_error(LOGGER, "There is no free space in memory. Removing a partition.");
 	remove_a_partition();
 	return get_bs_available_partition_by_size(partition_size);
 }
@@ -354,22 +341,38 @@ memory_partition * get_partitions_available_by_alg(int partition_size) {
 	return NULL;
 }
 memory_partition * get_partitions_available_partition_by_size(int partition_size) {
+	int failed_searches = 0;
 	memory_partition * ret = get_partitions_available_by_alg(partition_size);
 	if(ret != NULL) {
 		return ret;
 	}
 
-	//DEBUG_LOGlog_error(LOGGER, "No suitable partition. Compacting...");
-	compact_memory(false);
+	failed_searches++;
 
-	ret = get_partitions_available_by_alg(partition_size);
-	if(ret != NULL) {
-		return ret;
+	if(CONFIG.compacting_freq == -1) {
+		while(ret == NULL) {
+			while(partitions->elements_count > 1) {
+				remove_a_partition();
+				ret = get_partitions_available_by_alg(partition_size);
+				if(ret != NULL) {
+					return ret;
+				}
+			}
+			compact_memory(false);
+		}
+	} else {
+		while(ret == NULL) {
+			while(failed_searches < CONFIG.compacting_freq) {
+				remove_a_partition();
+				ret = get_partitions_available_by_alg(partition_size);
+				if(ret != NULL) {
+					return ret;
+				}
+			}
+			compact_memory(false);
+		}
 	}
-
-	//DEBUG_LOGlog_error(LOGGER, "No results. Must remove a partition...");
-	remove_a_partition();
-	return get_partitions_available_partition_by_size(partition_size);
+	return NULL;
 }
 memory_partition * find_partition_starting_in(int partition_start) {
 	int i;
@@ -405,9 +408,9 @@ void print_partitions_info() {
 	log_info(LOGGER, "-------------------------------------------------------");
 }
 void print_partition_info(int n, memory_partition * partition) {
-	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db",
+	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>",
 			n, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
-			partition->is_free ? 'X' : 'F', partition->partition_size);
+			partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time);
 }
 void free_memory_partition(memory_partition * partition) {
 	message_queue * queue = find_queue_by_name(partition->message->message->header->queue);
@@ -434,21 +437,20 @@ void free_memory_partition(memory_partition * partition) {
 		compact_memory(true);
 	}
 	pthread_mutex_unlock(&memory_access_mutex);
+	log_info(LOGGER, "REMOVED PARTITION %d (%d)", partition->number, partition->partition_start - main_memory);
 }
 memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 	memory_partition * the_partition = get_available_partition_by_payload_size(payload_size);
 
 	if(the_partition == NULL) {
-		//DEBUG_LOGlog_error(LOGGER, "Data has not been written");
 	} else {
 		the_partition->is_free = false;
 		the_partition->free_size = the_partition->partition_size - payload_size;
+		the_partition->access_time = get_time_counter();
 		memcpy(the_partition->partition_start, payload, payload_size);
 
 		memory_free_space -= payload_size;
 	}
-
-	print_partitions_info();
 
 	return the_partition;
 }
@@ -461,6 +463,7 @@ void compact_memory(int already_reserved_mutex) {
 	switch(CONFIG.memory_alg) {
 		case PARTITIONS:
 			{
+				log_info(LOGGER, "START COMPACTING");
 				int was_change = false;
 				do {
 					was_change = false;
@@ -498,10 +501,12 @@ void compact_memory(int already_reserved_mutex) {
 						}
 					}
 				} while(was_change);
+				log_info(LOGGER, "DONE COMPACTING");
 			}
 			break;
 		case BUDDY_SYSTEM:;
 			{
+				log_info(LOGGER, "START BD ASSOCIATION");
 				int was_change = false;
 				do {
 					was_change = false;
@@ -515,6 +520,9 @@ void compact_memory(int already_reserved_mutex) {
 							int addr_1 = p1->partition_start - main_memory;
 							int buddy_check = addr_1  ^ p2->partition_size;
 							if(buddy_check == (p2->partition_start - main_memory)) {
+								log_info(LOGGER, "ASOCIATE PARTITIONS %d (%d) AND %d (%d)",
+										p1->number, p1->partition_start - main_memory,
+										p2->number, p2->partition_start - main_memory);
 								p1->partition_size *= 2;
 								list_remove(partitions, i+1);
 								free(p2);
@@ -527,6 +535,7 @@ void compact_memory(int already_reserved_mutex) {
 						}
 					}
 				} while(was_change);
+				log_info(LOGGER, "DONE BD ASSOCIATION");
 			}
 			break;
 	}
@@ -534,7 +543,6 @@ void compact_memory(int already_reserved_mutex) {
 	if(!already_reserved_mutex){
 		pthread_mutex_unlock(&memory_access_mutex);
 	}
-	//DEBUG_LOGlog_info(LOGGER, "Memory has been compacted");
 }
 void remove_a_partition() {
 	int i;
@@ -546,6 +554,7 @@ void remove_a_partition() {
 					memory_partition * partition = list_get(partitions, i);
 					if(!partition->is_free) {
 						to_remove = partition;
+						i = partitions->elements_count + 1;
 					}
 				}
 			}
@@ -564,11 +573,9 @@ void remove_a_partition() {
 			break;
 	}
 	if(to_remove == NULL) {
-		//DEBUG_LOGlog_info(LOGGER, "No partition to remove");
 	} else {
-		//DEBUG_LOGlog_info(LOGGER, "Removing partition %d", to_remove->number);
+		free_memory_partition(to_remove);
 	}
-	free_memory_partition(to_remove);
 }
 void * access_partition(memory_partition * partition) {
 	partition->access_time = get_time_counter();
@@ -597,8 +604,6 @@ void init_queue(_message_queue_name name) {
 	list_add(queues, queue);
 
 	pthread_create(&queue->thread, NULL, queue_thread_function, queue);
-
-	//DEBUG_LOGlog_info(LOGGER, "Created List %s & Server Started", enum_to_queue_name(name));
 }
 message_queue * find_queue_by_name(_message_queue_name name) {
 	int i;
@@ -639,18 +644,18 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	}
 	free(aux_str->payload);
 	free(aux_str);
+	log_info(LOGGER, "WRITEN MID %d TO PARTITION %d (%d)", final_message->message->header->message_id, partition->number,
+			partition->partition_start - main_memory);
 	partition->message = final_message;
 	final_message->message->payload = partition;
 	final_message->payload_address_copy = partition;
 
-	//DEBUG_LOGlog_info(LOGGER, "Adding message %d to queue %s with correlative %d", message->header->message_id, enum_to_queue_name(queue_name), message->header->correlative_id);
 	pthread_mutex_lock(&queue->mutex);
 	pthread_mutex_lock(&messages_index_mutex);
 	list_add(queue->messages, final_message);
 	list_add(messages_index, final_message);
 	pthread_mutex_unlock(&messages_index_mutex);
 	pthread_mutex_unlock(&queue->mutex);
-	//DEBUG_LOGlog_info(LOGGER, "\t\tAdded");
 	return OPT_OK;
 }
 void queue_thread_function(message_queue * queue) {
@@ -671,7 +676,7 @@ void queue_thread_function(message_queue * queue) {
 
 				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber)) {
 
-					//DEBUG_LOGlog_info(LOGGER, "Sending MID %d, to socket %d", tmessage->message->header->message_id, tsubscriber->socket);
+					log_info(LOGGER, "SEND MID %d, TO FD %d", tmessage->message->header->message_id, tsubscriber->socket);
 
 					pthread_mutex_lock(&tsubscriber->mutex);
 					send_pokemon_message_with_id(tsubscriber->socket, tmessage->message, 0,
@@ -701,8 +706,6 @@ void queue_thread_function(message_queue * queue) {
  * */
 
 int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name) {
-	//DEBUG_LOGlog_info(LOGGER, "Socket %d subscribing to queue %d", socket, queue_name);
-
 	client * sub = add_or_get_client(socket, ip, port);
 
 	message_queue * queue = find_queue_by_name(queue_name);
@@ -711,13 +714,13 @@ int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_na
 		list_add(queue->subscribers, sub);
 		pthread_mutex_unlock(&queue->mutex);
 
-		//DEBUG_LOGlog_info(LOGGER, "Subscription successful");
+		log_info(LOGGER, "FD %d SUBSCRIBED TO QUEUE %s", socket, enum_to_queue_name(queue_name));
 		pthread_mutex_lock(&sub->mutex);
 		send_int(socket, OPT_OK);
 		pthread_mutex_unlock(&sub->mutex);
 		return OPT_OK;
 	} else {
-		//DEBUG_LOGlog_info(LOGGER, "Cannot find queue %d", queue_name);
+		log_info(LOGGER, "FD %d FAILED SUBSCRIBING TO QUEUE %s", socket, enum_to_queue_name(queue_name));
 		pthread_mutex_lock(&sub->mutex);
 		send_int(socket, OPT_FAILED);
 		pthread_mutex_unlock(&sub->mutex);
@@ -725,8 +728,6 @@ int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_na
 	}
 }
 int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name) {
-	//DEBUG_LOGlog_info(LOGGER, "Socket %d unsubscribing from queue %d", socket, queue_name);
-
 	message_queue * queue = find_queue_by_name(queue_name);
 	client * tc = add_or_get_client(socket, ip, port);
 
@@ -742,20 +743,17 @@ int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queu
 		}
 		pthread_mutex_unlock(&queue->mutex);
 		if(r == 0) {
-			//DEBUG_LOGlog_info(LOGGER, "Unsubscription failed");
 			pthread_mutex_lock(&tc->mutex);
 			send_int(socket, OPT_FAILED);
 			pthread_mutex_unlock(&tc->mutex);
 			return OPT_FAILED;
 		} else {
-			//DEBUG_LOGlog_info(LOGGER, "Unsubscription successful");
 			pthread_mutex_lock(&tc->mutex);
 			send_int(socket, OPT_OK);
 			pthread_mutex_unlock(&tc->mutex);
 			return OPT_OK;
 		}
 	} else {
-		//DEBUG_LOGlog_info(LOGGER, "Cannot find queue %d", queue_name);
 		pthread_mutex_lock(&tc->mutex);
 		send_int(socket, OPT_FAILED);
 		pthread_mutex_unlock(&tc->mutex);
@@ -1026,13 +1024,11 @@ void * deserialize_message_payload(void * payload, pokemon_message_type type) {
  * */
 
 int server_function(int socket) {
-	//DEBUG_LOGlog_info(LOGGER, "Server Started");
 	void new(int fd, char * ip, int port) {
+		log_info(LOGGER, "NEW CONNECTION from FD %d", fd);
 	}
 
 	void lost(int fd, char * ip, int port) {
-		//client * corr_client = add_or_get_client(fd, ip, port);
-		//unsubscribe_socket_from_all_queues(fd, ip, port);
 	}
 
 	void incoming(int fd, char * ip, int port, net_message_header * header) {
@@ -1058,21 +1054,15 @@ int server_function(int socket) {
 					pthread_mutex_lock(&from->mutex);
 					send_int(fd, message_id);
 
-					//DEBUG_LOGlog_info(LOGGER, "Incoming message from socket %d", fd);
-
 					queue_message * message = receive_pokemon_message(fd);
 
 					if(message->header->message_id == message_id) {
-						//DEBUG_LOGlog_info(LOGGER, "Assigned MID %d", message->header->message_id);
 					} else {
-						//DEBUG_LOGlog_info(LOGGER, "With preassigned MID %d", message->header->message_id);
 					}
 
 					print_pokemon_message(message);
 					if(add_message_to_queue(message, message->header->queue) == OPT_OK) {
-
 					} else {
-						//DEBUG_LOGlog_error(LOGGER, "Error adding message %d to queue", message->header->message_id);
 					}
 					pthread_mutex_unlock(&from->mutex);
 				}
@@ -1101,7 +1091,7 @@ int generate_message_id() {
 	return last_message_id++;
 }
 int acknowledge_message(int socket, char * ip, int port, int message_id) {
-	//DEBUG_LOGlog_info(LOGGER, "Socket %d acknowledged message %d", socket, message_id);
+	log_info(LOGGER, "FD %d ACK MSG %d", socket, message_id);
 	client * from = add_or_get_client(socket, ip, port);
 
 	int i;
