@@ -591,6 +591,7 @@ void remove_a_partition() {
 }
 void * access_partition(memory_partition * partition) {
 	partition->access_time = get_time_counter();
+	log_info(LOGGER, "Accessing partition %d", partition->number);
 	return partition->partition_start;
 }
 int get_time_counter() {
@@ -681,11 +682,12 @@ void queue_thread_function(message_queue * queue) {
 
 			memory_partition * partition = tmessage->payload_address_copy;
 
-			void * deserialized_message = deserialize_message_payload(access_partition(partition), tmessage->message->header->type);
+			void * deserialized_message = deserialize_message_payload(partition, tmessage->message->header->type);
 			tmessage->message->is_serialized = false;
 			tmessage->message->payload = deserialized_message;
 
 			for(j=0 ; j<queue->subscribers->elements_count ; j++) {
+				access_partition(partition);
 				client * tsubscriber = list_get(queue->subscribers, j);
 
 				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber)) {
@@ -1120,7 +1122,7 @@ int acknowledge_message(int socket, char * ip, int port, int message_id) {
 					queue->subscribers->elements_count) {
 
 				memory_partition * partition = message->payload_address_copy;
-				free_memory_partition(partition);
+				//free_memory_partition(partition);
 
 			}
 
