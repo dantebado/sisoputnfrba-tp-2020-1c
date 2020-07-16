@@ -150,6 +150,7 @@ void setup(int argc, char **argv) {
 
 	CONFIG.internal_socket = create_socket();
 	bind_socket(CONFIG.internal_socket, CONFIG.broker_port);
+
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
 	pthread_join(CONFIG.server_thread, NULL);
 }
@@ -350,26 +351,30 @@ memory_partition * get_partitions_available_partition_by_size(int partition_size
 	failed_searches++;
 
 	if(CONFIG.compacting_freq == -1) {
+		remove_a_partition();
 		while(ret == NULL) {
 			while(partitions->elements_count > 1) {
-				remove_a_partition();
 				ret = get_partitions_available_by_alg(partition_size);
 				if(ret != NULL) {
 					return ret;
 				}
+				remove_a_partition();
 			}
 			compact_memory(false);
 		}
 	} else {
+		remove_a_partition();
 		while(ret == NULL) {
 			while(failed_searches < CONFIG.compacting_freq) {
-				remove_a_partition();
 				ret = get_partitions_available_by_alg(partition_size);
 				if(ret != NULL) {
 					return ret;
 				}
+				failed_searches++;
+				remove_a_partition();
 			}
 			compact_memory(false);
+			failed_searches = 0;
 		}
 	}
 	return NULL;
@@ -409,10 +414,12 @@ void print_partitions_info() {
 }
 void print_partition_info(int n, memory_partition * partition) {
 	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>",
-			n, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
+			partition->number, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
 			partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time);
 }
 void free_memory_partition(memory_partition * partition) {
+	int i, j;
+
 	message_queue * queue = find_queue_by_name(partition->message->message->header->queue);
 	pthread_mutex_lock(&queue->mutex);
 	pthread_mutex_lock(&messages_index_mutex);
@@ -435,6 +442,28 @@ void free_memory_partition(memory_partition * partition) {
 
 	if(CONFIG.memory_alg == BUDDY_SYSTEM) {
 		compact_memory(true);
+	} else {
+		for(j=0 ; j<partitions->elements_count - 1; j++) {
+			memory_partition * tpartition = list_get(partitions, j);
+			memory_partition * next_partition = list_get(partitions, j+1);
+
+			if(next_partition != NULL) {
+				if(next_partition->is_free && tpartition->is_free) {
+					tpartition->partition_size += next_partition->partition_size;
+					for(i=0 ; i<partitions->elements_count ; i++) {
+						memory_partition * tp = list_get(partitions, i);
+						if(tp->number == next_partition->number) {
+							list_remove(partitions, i);
+							i--;
+						} else {
+							if(tp->number > tpartition->number) {
+								tp->number = tp->number - 1;
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 	pthread_mutex_unlock(&memory_access_mutex);
 	log_info(LOGGER, "REMOVED PARTITION %d (%d)", partition->number, partition->partition_start - main_memory);
@@ -464,43 +493,26 @@ void compact_memory(int already_reserved_mutex) {
 		case PARTITIONS:
 			{
 				log_info(LOGGER, "START COMPACTING");
-				int was_change = false;
-				do {
-					was_change = false;
-					for(i=0 ; i<partitions->elements_count - 1; i++) {
-						memory_partition * p1 = list_get(partitions, i);
-						memory_partition * p2 = list_get(partitions, i + 1);
+				int free_s = 0, removed = 0;
+				void * last_ptr = main_memory;
+				for(i=0 ; i<partitions->elements_count ; i++) {
+					memory_partition * tp = list_get(partitions, i);
+					if(tp->is_free) {
+						free_s += tp->partition_size;
+						list_remove(partitions, i);
+						removed++;
+						i--;
+					} else {
+						memcpy(last_ptr, tp->partition_start, tp->partition_size);
+						tp->partition_start = last_ptr;
 
-						if(p1->is_free) {
-
-							if(p2->is_free) {
-								list_remove(partitions, i+1);
-								p1->partition_size += p2->partition_size;
-								free(p2);
-							} else {
-								memcpy(p1->partition_start, p2->partition_start, p2->partition_size);
-
-								int original_size = p2->partition_size;
-								p2->partition_start = p1->partition_start + p2->partition_size;
-								if(p1->partition_size > p2->partition_size) {
-									p2->partition_size += p1->partition_size - p2->partition_size;
-								} else {
-									p2->partition_size -= p2->partition_size - p1->partition_size;
-								}
-
-								p1->partition_size = original_size;
-								p1->is_free = false;
-								p2->is_free = true;
-
-								p2->message->message->payload = p1;
-								p1->message = p2->message;
-							}
-
-							was_change = true;
-							i = partitions->elements_count + 1;
-						}
+						tp->number = tp->number - removed;
+						last_ptr += tp->partition_size;
 					}
-				} while(was_change);
+				}
+				if(free_s > 0) {
+					list_add(partitions, partition_create(partitions->elements_count, free_s, last_ptr, NULL));
+				}
 				log_info(LOGGER, "DONE COMPACTING");
 			}
 			break;
@@ -649,6 +661,8 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	partition->message = final_message;
 	final_message->message->payload = partition;
 	final_message->payload_address_copy = partition;
+
+	print_partitions_info();
 
 	pthread_mutex_lock(&queue->mutex);
 	pthread_mutex_lock(&messages_index_mutex);
