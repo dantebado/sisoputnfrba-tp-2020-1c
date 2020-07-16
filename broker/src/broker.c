@@ -562,11 +562,12 @@ void remove_a_partition() {
 	switch(CONFIG.remplacement_alg) {
 		case FIFO_REPLACEMENT:
 			{
+				int now_time_counter = get_time_counter();
 				for(i=0 ; i<partitions->elements_count ; i++) {
 					memory_partition * partition = list_get(partitions, i);
-					if(!partition->is_free) {
+					if(now_time_counter >= partition->entry_time && !partition->is_free) {
+						now_time_counter = partition->entry_time;
 						to_remove = partition;
-						i = partitions->elements_count + 1;
 					}
 				}
 			}
@@ -584,8 +585,8 @@ void remove_a_partition() {
 			}
 			break;
 	}
-	if(to_remove == NULL) {
-	} else {
+	if(to_remove == NULL) { }
+	else {
 		free_memory_partition(to_remove);
 	}
 }
@@ -682,7 +683,7 @@ void queue_thread_function(message_queue * queue) {
 
 			memory_partition * partition = tmessage->payload_address_copy;
 
-			void * deserialized_message = deserialize_message_payload(partition, tmessage->message->header->type);
+			void * deserialized_message = deserialize_message_payload(partition->partition_start, tmessage->message->header->type);
 			tmessage->message->is_serialized = false;
 			tmessage->message->payload = deserialized_message;
 
