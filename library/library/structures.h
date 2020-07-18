@@ -247,7 +247,6 @@ typedef enum{
 	READY_ACTION,
 	EXEC_ACTION,
 	BLOCKED_ACTION,
-	DEADLOCK_ACTION,
 	EXIT_ACTION
 } trainer_action_status;
 
@@ -260,7 +259,7 @@ typedef enum {
 typedef struct {
 	trainer_activity_type type;
 	int correlative_id_awaiting; //El id del mensaje que va a estar esperando del gamecard
-	void * data;
+	void * data; //Aca va el entrenador con el que estas haciendo trade
 } trainer_activity ;
 
 typedef struct{
@@ -270,6 +269,8 @@ typedef struct{
 
 	float estimation;
 	float last_estimation;
+
+	int max_catch;
 
 	pthread_t * thread;
 	pthread_mutex_t mutex;
@@ -290,11 +291,6 @@ typedef struct {
 } trainer __attribute__((packed));
 
 typedef struct{
-	trainer * allocator_trainer;
-	char * allocated_pokemon;
-} pokemon_allocation;
-
-typedef struct{
 	int global_cpu_counter;
 	int context_switch_counter;
 	int solved_deadlocks;
@@ -303,9 +299,8 @@ typedef struct{
 typedef enum {
 	FIFO_PLANNING,
 	RR,
-	SJF_CD,
-	SJF_SD
 } _planning_alg;
+
 typedef struct {
 	t_list * trainers_positions;
 	t_list * trainers_pokemons;
