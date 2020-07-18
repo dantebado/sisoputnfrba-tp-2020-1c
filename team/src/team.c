@@ -10,11 +10,13 @@ int has_broker_connection = false;
 t_list * trainers;
 
 t_list * global_requirements;
+//Son los pokemones que el team necesita EN TOTAL
 
 t_list * deadlock_groups;
 
 pthread_mutex_t required_pokemons_mutex;
 t_list * required_pokemons;
+//Son los pokemones que el team necesita Y ESTAN EN EL MAPA
 
 pthread_mutex_t ready_queue_mutex;
 t_list * ready_queue;
@@ -65,6 +67,7 @@ void set_required_pokemons();
 int is_id_in_list(t_list * list, int value);
 void print_current_requirements();
 int requirements_are_finished();
+void print_statistics();
 
 //Deadlock
 int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * tg, t_list * steps);
@@ -115,6 +118,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 			{
 				appeared_pokemon_message * apm = message->payload;
 
+				log_info(LOGGER, "A new %s has appeared in the map! It is @ [%d - %d]", apm->pokemon, apm->x, apm->y);
+
 				//Veo si me sirve el pokemon que aparecio
 				if(is_required(apm->pokemon)) {
 					log_info(LOGGER, "Adding to required pokemons");
@@ -132,6 +137,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 		case CATCH_POKEMON:;
 			catch_pokemon_message * chpm = message->payload;
 			break;
+			//El catch se manda al broker durante el executing del entrenador...
+
 		case CAUGHT_POKEMON:;
 			{
 				caught_pokemon_message * ctpm = message->payload;
@@ -144,23 +151,42 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 						if(ttrainer->stats->current_activity->correlative_id_awaiting == message->header->correlative_id) {
 							if(ttrainer->stats->current_activity->type == AWAITING_CAPTURE_RESULT) {
 
-								log_info(LOGGER, "Trainer %d was expecting this message", ttrainer->id);
+								//log_info(LOGGER, "Trainer %d was expecting this message", ttrainer->id);
 
 								if(ctpm->result) {
 									appeared_pokemon_message * tapm = ttrainer->stats->current_activity->data;
 									list_add(ttrainer->pokemons, tapm->pokemon);
+									log_info(LOGGER, "Trainer %d has captured his objective successfully!");
 
 									_diff_my_caught_pokemons(ttrainer);
 									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
 									treq->total_caught++;
 
-									log_info(LOGGER, "Capture registered successfully");
-									print_current_requirements();
+									//print_current_requirements();
 
-									//compute_deadlocks();
+									if(is_trainer_completed(ttrainer)){
+										ttrainer->stats->status = EXIT_ACTION;
+										log_info(LOGGER, "Trainer %d is in exit! He caught his last pokemon", ttrainer->id);
+										if(is_globally_completed()){
+											log_info(LOGGER, "Team has finished! Statistics:");
+											print_statistics();
+											exit(1);
+										}
+									}else{
+										block_trainer(ttrainer);
+										log_info(LOGGER, "Trainer %d is blocked! He has caught a pokemon", ttrainer->id);
+									}
+
+									//Si ya estan todos los pokemones que el team necesita
+									if(requirements_are_finished()){
+										log_info(LOGGER, "Deadlock detection algorithm started!");
+
+										deadlock_groups = all_possible_combinations(trainers);
+										detect_circular_chains();
+									}
+								}else{
+									log_info(LOGGER, "Trainer %d could not capture his objective!");
 								}
-
-								ttrainer->stats->status = BLOCKED_ACTION;
 
 								free(ttrainer->stats->current_activity);
 								ttrainer->stats->current_activity = NULL;
@@ -173,9 +199,13 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 		case GET_POKEMON:;
 			get_pokemon_message * gpm = message->payload;
 			break;
+			//El get se manda automaticamente en broker_server_function cuando arranca el team...
+
 		case LOCALIZED_POKEMON:;
 			localized_pokemon_message * lpm = message->payload;
 			{
+				log_info(LOGGER, "%s has been localized!", lpm->pokemon);
+
 				int i, already_recieved = false;
 				for(i=0 ; i<required_pokemons->elements_count ; i++) {
 					appeared_pokemon_message * tapm = list_get(required_pokemons, i);
@@ -192,6 +222,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 							pthread_mutex_unlock(&required_pokemons_mutex);
 						}
 					} else {
+						//Nada, el pokemon no es requerido por el team
 					}
 				}
 			}
@@ -255,7 +286,7 @@ void set_required_pokemons(){
 int broker_server_function() {
 	int success_listening = failed, i;
 	do {
-		log_info(LOGGER, "Atempting to connect to broker");
+		log_info(LOGGER, "Attempting to connect to broker");
 		if((CONFIG.broker_socket = create_socket()) == failed) {
 			log_info(LOGGER, "Cannot create socket to connect to broker");
 		} else if(connect_socket(CONFIG.broker_socket, CONFIG.broker_ip, CONFIG.broker_port) == failed) {
@@ -265,6 +296,8 @@ int broker_server_function() {
 		} else {
 			success_listening = success;
 			has_broker_connection = true;
+
+			log_info(LOGGER, "Broker connection success!");
 		}
 	} while (success_listening == failed);
 
@@ -433,7 +466,7 @@ void setup(int argc, char **argv) {
 	//CREAMOS LAS LISTAS PARA LOS ENTRENADORES
 	trainers = list_create();
 
-	log_info(LOGGER, "Creating pokemons");
+	//log_info(LOGGER, "Creating pokemons");
 
 	//CREAMOS LOS ENTRENADORES
 	if(trainers_count > 0) {
@@ -513,7 +546,7 @@ void setup(int argc, char **argv) {
 
 			list_add(trainers, t);
 
-			log_info(LOGGER, "Trainer %d @ [%d - %d]", t->id, t->x, t->y);
+			log_info(LOGGER, "There is a new trainer with id %d @ [%d - %d]", t->id, t->x, t->y);
 		}
 	}
 	deadlock_groups = all_possible_combinations(trainers);
@@ -596,16 +629,29 @@ void sort_queues(){
 			break; //Queda igual porque planifica FIFO, despues controlamos el quantum
 	}
 
-	log_info(LOGGER, "Sorted queues");
+	//log_info(LOGGER, "Sorted queues");
 
 	//Hay que correr el primero en la cola de ready
 	if(!list_is_empty(ready_queue) && executing_trainer == NULL){
 		executing_trainer = list_remove(ready_queue, 0);
 		executing_trainer->stats->status = EXEC_ACTION;
 
-		log_info(LOGGER, "Now executing trainer %d", executing_trainer->id);
+		statistics->context_switch_counter++;
+
+		//log_info(LOGGER, "Now executing trainer %d", executing_trainer->id);
 	}
 	pthread_mutex_unlock(&ready_queue_mutex);
+}
+
+void print_statistics(){
+	log_info(LOGGER, "\t %d CPU cycles have been consumed", statistics->global_cpu_counter);
+	for(int i=0; i<trainers->elements_count; i++){
+		trainer * t = list_get(trainers, i);
+
+		log_info(LOGGER, "Trainer %d has consumed %d CPU cycles", t->id, t->stats->summation_quantum_counter);
+	}
+	log_info(LOGGER, "%d context switches have been done", statistics->context_switch_counter);
+	log_info(LOGGER, "%d deadlocks have been found and solved", statistics->solved_deadlocks);
 }
 
 int is_trainer_completed(trainer * t) {
@@ -620,7 +666,6 @@ int is_globally_completed() {
 			return false;
 		}
 	}
-	exit(1);
 	return true;
 }
 
@@ -630,10 +675,10 @@ int location_are_the_same(location * l1, location * l2) {
 
 bool move_to(trainer * t, int x, int y){
 	if(location_are_the_same(location_create(x, y), location_create(t->x, t->y))) {
-		log_info(LOGGER, "\tIs already there");
+		//log_info(LOGGER, "\tIs already there");
 		return true;
 	} else {
-		log_info(LOGGER, "\tIs moving");
+		//log_info(LOGGER, "\tTrainer %d is moving!", t->id);
 		if(t->x != x) {
 			if(t->x < x) {
 				t->x++;
@@ -647,7 +692,7 @@ bool move_to(trainer * t, int x, int y){
 				t->y--;
 			}
 		}
-		log_info(LOGGER, "\t\tNew Position %d %d", t->x, t->y);
+		log_info(LOGGER, "\tTrainer %d moved to new Position [%d - %d]", t->id, t->x, t->y);
 	}
 	return false;
 }
@@ -662,16 +707,18 @@ int need_that_pokemon(trainer * myself, char * suspected_pokemon){
 
 void executing(trainer * t){
 	//Es el entrenador ejecutando acciones
-	log_info(LOGGER, "Init thread, trainer %d", t->id);
+	//log_info(LOGGER, "Init thread, trainer %d", t->id);
+
+	int trading_counter = 0;
 
 	while(1){
 		pthread_mutex_lock(&t->stats->mutex);
 
-		log_info(LOGGER, "Trainer %d executing", t->id);
+		log_info(LOGGER, "Trainer %d is executing! He is the first in ready queue", t->id);
 
 		int quantum_ended = false;
 
-		t->stats->last_job_counter++;
+		t->stats->last_job_counter++; //Iba para el SJF...
 		t->stats->summation_quantum_counter++;
 
 		statistics->global_cpu_counter++;
@@ -688,14 +735,13 @@ void executing(trainer * t){
 				{
 					appeared_pokemon_message * apm = t->stats->current_activity->data;
 
-					log_info(LOGGER, "\tIs capturing pokemon %s at %d %d",
-							apm->pokemon, apm->x, apm->y);
+					//log_info(LOGGER, "\tIs capturing pokemon %s at %d %d", apm->pokemon, apm->x, apm->y);
 
 					if(move_to(t, apm->x, apm->y)) {
 						queue_message * msg = catch_pokemon_create(apm->pokemon, apm->x, apm->y);
 
 						internal_broker_need = true;
-							log_info(LOGGER, "\tIs already there, sending catch msg");
+							log_info(LOGGER, "\tTrainer %d has sent a catch message! His objective is %s", t->id, apm->pokemon);
 
 							if(has_broker_connection == true) {
 								send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
@@ -709,6 +755,11 @@ void executing(trainer * t){
 						t->stats->current_activity = NULL;
 
 						t->stats->status = BLOCKED_ACTION;
+
+						log_info(LOGGER, "Trainer %d is blocked! He has sent a catch message", t->id);
+
+						t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
+
 						executing_trainer = NULL;
 					}
 				}
@@ -718,18 +769,14 @@ void executing(trainer * t){
 				//Lo hacemos en recibo de mensajes process_pokemon_message
 
 
-			//creamos una nueva locacion de pokemon con este entrenador y el pokemon atrapado
-				//pokemon_allocation * pa;
-				//pa->trainer = trainer;
-				//pa->pokemon = captured_pokemon
+				//creamos una nueva locacion de pokemon con este entrenador y el pokemon atrapado
 				//El deadlock lo chequearemos cuando se hayan capturado todos los pokemones que el team necesita
 				//if(requirements_are_finished)....
 				break;
 			case TRADING: ;
 				//Por que data?? Confiamos que ahi esta el entrenador con el que voy a hacer trade
 				trainer * trading_trainer = t->stats->current_activity->data;
-				log_info(LOGGER, "\tIs trading with %d at %d %d",
-											trading_trainer->id, trading_trainer->x, trading_trainer->y);
+				//log_info(LOGGER, "\tIs trading with %d at %d %d", trading_trainer->id, trading_trainer->x, trading_trainer->y);
 
 				if(move_to(t, trading_trainer->x, trading_trainer->y)) {
 					void _trade(trainer * self, trainer * friend){
@@ -748,7 +795,32 @@ void executing(trainer * t){
 							}
 						}
 					}
-					_trade(t, trading_trainer);
+					if(trading_counter < 5){
+						//El entrenador espera...
+					}else{
+						_trade(t, trading_trainer);
+						log_info(LOGGER, "Trainers %d %d have traded a pokemon!", t->id, trading_trainer->id);
+
+						executing_trainer = NULL;
+						trading_counter = 0;
+
+						if(is_trainer_completed(t)){
+							t->stats->status = EXIT_ACTION;
+							log_info(LOGGER, "Trainer %d is in exit! He has traded his last pokemon", t->id);
+						}if(is_trainer_completed(trading_trainer)){
+							log_info(LOGGER, "Trainer %d is in exit! He has traded his last pokemon", trading_trainer->id);
+						}if(is_globally_completed()){
+							log_info(LOGGER, "Team has finished! Statistics:");
+							print_statistics();
+							exit(1);
+						}else{
+							block_trainer(t);
+							log_info(LOGGER, "Trainer %d is blocked! He has recently traded", t->id);
+
+							block_trainer(trading_trainer);
+							log_info(LOGGER, "Trainer %d is blocked! He has recently traded", trading_trainer->id);
+						}
+					}
 				}
 
 				break;
@@ -791,6 +863,8 @@ void compute_pending_actions() {
 			free_trainer->stats->current_activity = activity;
 			free_trainer->stats->status = READY_ACTION;
 			list_add(ready_queue, free_trainer);
+
+			log_info(LOGGER, "Trainer %d is ready! He is the closest to catch", free_trainer->id);
 		}
 
 		list_remove(required_pokemons, 0);
@@ -951,9 +1025,13 @@ void detect_circular_chains(){
 		t_list * tg = list_get(deadlock_groups, i);
 
 		if(detect_deadlock_from(list_get(tg, 0), tg)){
+			statistics->solved_deadlocks++;
+
+			log_info(LOGGER, "A deadlock has been found!");
 			solve_deadlock_for(tg, list_get(tg, 0));
 		}
 	}
+	log_info(LOGGER, "No deadlocks have been found!");
 }
 
 int detect_deadlock_from(trainer * root, t_list * tg){
@@ -974,13 +1052,22 @@ int detect_deadlock_from(trainer * root, t_list * tg){
 
 void solve_deadlock_for(t_list * tg, trainer * root){
 	block_trainer(root);
+	log_info(LOGGER, "Trainer %d is blocked! He is waiting another trainer to solve a deadlock", root->id);
 
 	for(int i=0; i<tg->elements_count; i++){
 		trainer * ttrainer = list_get(tg, i);
 
 		if(ttrainer->id != root->id){
-			ttrainer->stats->current_activity->type = TRADING;
-			ttrainer->stats->current_activity->data = root;
+			trainer_activity * activity = malloc(sizeof(trainer_activity));
+			activity->type = TRADING;
+			activity->data = root;
+			activity->correlative_id_awaiting = -1;
+
+			ttrainer->stats->current_activity = activity;
+			ttrainer->stats->status = READY_ACTION;
+			list_add(ready_queue, ttrainer);
+
+			log_info(LOGGER, "Trainer %d is ready! He is about to solve a deadlock", ttrainer->id);
 		}
 	}
 }
