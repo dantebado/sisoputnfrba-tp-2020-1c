@@ -563,6 +563,7 @@ void setup(int argc, char **argv) {
 	}*/
 
 	deadlock_groups = all_possible_combinations(trainers);
+	log_info(LOGGER, "$asadas");
 	//TODO debug de deadlock
 	//detect_circular_chains();
 
@@ -852,8 +853,6 @@ void executing(trainer * t){
 						to = from;
 						from = swap_trainer;
 
-						log_info(LOGGER, "swapping");
-
 						int reverse_trading = 0;
 						for(int i=0; i<from->pokemons->elements_count; i++){
 							tmp_pokemon = list_get(from->pokemons, i);
@@ -868,13 +867,13 @@ void executing(trainer * t){
 							}
 						}
 
-						log_info(LOGGER, "swapping");
+						log_info(LOGGER, "Reverse trading %d", reverse_trading);
 
 						if(reverse_trading == 0) {
 							if(from->pokemons->elements_count > 0) {
 								tmp_pokemon = list_get(from->pokemons, 0);
 								for(i=0 ; i<from->pokemons->elements_count ; i++) {
-									another_tmp_pokemon = list_get(from->targets, i);
+									another_tmp_pokemon = list_get(from->pokemons, i);
 									if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0) {
 										list_remove(from->pokemons, i);
 										list_add(to->pokemons, tmp_pokemon);
@@ -1147,13 +1146,13 @@ void detect_circular_chains(){
 			if(is_in_deadlock){
 				statistics->solved_deadlocks++;
 				log_info(LOGGER, "A deadlock has been found!");
-				solve_deadlock_for(tg, list_get(tg, 0));
 				flag_detected_deadlocks = 1;
+				solve_deadlock_for(tg, list_get(tg, 0));
 			}
 		}
 	}
 	if(flag_detected_deadlocks != 0){
-		log_info(LOGGER, "No deadlocks have been found!");
+		log_info(LOGGER, "No deadlocks have been found in this detection round!");
 		//TODO detectar tradings que no involucran deadlock
 	}
 }
@@ -1175,23 +1174,37 @@ int detect_deadlock_from(trainer * root, t_list * tg){
 }
 
 void solve_deadlock_for(t_list * tg, trainer * root){
+	int went_to_solve = 0;
 	block_trainer(root);
 	log_info(LOGGER, "Trainer %d is blocked! He is waiting another trainer to solve a deadlock", root->id);
 
-	for(int i=0; i<tg->elements_count; i++){
+	for(int i=0; i<tg->elements_count; i++) {
 		trainer * ttrainer = list_get(tg, i);
 
-		if(ttrainer->id != root->id){
-			trainer_activity * activity = malloc(sizeof(trainer_activity));
-			activity->type = TRADING;
-			activity->data = root;
-			activity->correlative_id_awaiting = -1;
+		if(ttrainer->id != root->id) {
+			log_info(LOGGER, "Trainer %d is in deadlock too", ttrainer->id);
 
-			ttrainer->stats->current_activity = activity;
-			ttrainer->stats->status = READY_ACTION;
-			list_add(ready_queue, ttrainer);
+			for(int j=0 ; j<root->targets->elements_count ; j++) {
+				char * pt = list_get(root->targets, j);
 
-			log_info(LOGGER, "Trainer %d is ready! He is about to solve a deadlock", ttrainer->id);
+				for(int k=0 ; k<ttrainer->pokemons->elements_count ; k++) {
+					char * pt2 = list_get(ttrainer->pokemons, k);
+
+					if(strcmp(pt, pt2) == 0 && went_to_solve == 0) {
+						went_to_solve = 1;
+						trainer_activity * activity = malloc(sizeof(trainer_activity));
+						activity->type = TRADING;
+						activity->data = root;
+						activity->correlative_id_awaiting = -1;
+
+						ttrainer->stats->current_activity = activity;
+						ttrainer->stats->status = READY_ACTION;
+						list_add(ready_queue, ttrainer);
+
+						log_info(LOGGER, "   Trainer %d is ready! He is about to solve a deadlock", ttrainer->id);
+					}
+				}
+			}
 		}
 	}
 }
