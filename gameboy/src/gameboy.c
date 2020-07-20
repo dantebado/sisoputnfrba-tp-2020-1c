@@ -97,12 +97,12 @@ int main(int argc, char **argv) {
 
 void setup(int argc, char **argv) {
 	char * log_path = string_new();
-	string_append(&log_path, argc == 1 ? "gameboy" : "./../gameboy");
+	string_append(&log_path, "gameboy");
 	string_append(&log_path, ".log");
 	LOGGER = log_create(log_path, "gameboy", false, LOG_LEVEL_INFO);
 
 	char * cfg_path = string_new();
-	string_append(&cfg_path, argc == 1 ? "gameboy" : "./../gameboy");
+	string_append(&cfg_path, "gameboy");
 	string_append(&cfg_path, ".cfg");
 	_CONFIG = config_create(cfg_path);
 
