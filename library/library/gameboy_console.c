@@ -109,8 +109,8 @@ void execute(int command_number, char* param1, char* param2, char* param3, char*
 			if(param1 && param2 && param3 && param4 && !param5){
 				uint32_t x = atoi(param2);
 				uint32_t y = atoi(param3);
-				int message_id = atoi(param4);
-				_command_broker_appeared_pokemon(appeared_pokemon_create(param1, x, y), message_id, CONFIG);
+				int correlative_id = atoi(param4);
+				_command_broker_appeared_pokemon(appeared_pokemon_create(param1, x, y), correlative_id, CONFIG);
 			} else {
 				printf("Revise los parámetros\n");
 			}
@@ -132,8 +132,8 @@ void execute(int command_number, char* param1, char* param2, char* param3, char*
 				} else {
 					result = 0;
 				}
-				uint32_t message_id = atoi(param1);
-				_command_broker_caught_pokemon(caught_pokemon_create(result), message_id, CONFIG);
+				uint32_t correlative_id = atoi(param1);
+				_command_broker_caught_pokemon(caught_pokemon_create(result), correlative_id, CONFIG);
 			} else {
 				printf("Revise los parámetros\n");
 			}
@@ -155,11 +155,12 @@ void execute(int command_number, char* param1, char* param2, char* param3, char*
 			}
 			break;
 		case GAMECARD_NEW:
-			if(param1 && param2 && param3 && param4 && !param5){
+			if(param1 && param2 && param3 && param4 && param5){
 				uint32_t x = atoi(param2);
 				uint32_t y = atoi(param3);
 				uint32_t count = atoi(param4);
-				_command_gamecard_new_pokemon(new_pokemon_create(param1, x, y, count), CONFIG);
+				uint32_t message_id = atoi(param5);
+				_command_gamecard_new_pokemon(new_pokemon_create(param1, x, y, count), message_id, CONFIG);
 			} else {
 				printf("Revise los parámetros\n");
 			}
@@ -175,8 +176,9 @@ void execute(int command_number, char* param1, char* param2, char* param3, char*
 			}
 			break;
 		case GAMECARD_GET:
-			if(param1 && !param2 && !param3 && !param4 && !param5){
-				_command_gamecard_get_pokemon(get_pokemon_create(param1), CONFIG);
+			if(param1 && param2 && !param3 && !param4 && !param5){
+				uint32_t id = atoi(param2);
+				_command_gamecard_get_pokemon(get_pokemon_create(param1), id, CONFIG);
 			} else {
 				printf("Revise los parámetros\n");
 			}

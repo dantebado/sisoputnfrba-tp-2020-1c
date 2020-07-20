@@ -214,6 +214,7 @@ memory_partition * get_available_partition_by_payload_size(int payload_size) {
 	if(partition_size < CONFIG.partition_min_size) {
 		partition_size = CONFIG.partition_min_size;
 	}
+
 	if(CONFIG.memory_alg == BUDDY_SYSTEM) {
 		partition_size = closest_bs_size(payload_size);
 	}
@@ -413,9 +414,9 @@ void print_partitions_info() {
 	log_info(LOGGER, "-------------------------------------------------------");
 }
 void print_partition_info(int n, memory_partition * partition) {
-	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>",
+	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>\tET<%d>",
 			partition->number, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
-			partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time);
+			partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time, partition->entry_time);
 }
 void free_memory_partition(memory_partition * partition) {
 	int i, j;
@@ -476,6 +477,7 @@ memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 		the_partition->is_free = false;
 		the_partition->free_size = the_partition->partition_size - payload_size;
 		the_partition->access_time = get_time_counter();
+		the_partition->entry_time = the_partition->access_time;
 		memcpy(the_partition->partition_start, payload, payload_size);
 
 		memory_free_space -= payload_size;

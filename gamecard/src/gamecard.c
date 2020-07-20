@@ -11,6 +11,13 @@ pthread_mutex_t directory_operation_mutex;
 int internal_broker_need;
 pthread_mutex_t broker_mutex;
 
+typedef struct {
+	char * path;
+	char * file;
+	int references;
+} opened_file;
+t_list * opened_files;
+
 int has_broker_connection = false;
 
 //PROTOTYPES
@@ -59,9 +66,16 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 		case NEW_POKEMON:;
 			new_pokemon_message * npm = message->payload;
 
-			char * fileContent = tall_grass_read_file("/Pokemon", npm->pokemon, false);
-			if(fileContent != NULL) {
+			char * fileContent = NULL;
+			do {
+				fileContent = tall_grass_read_file("/Pokemon", npm->pokemon, false);
+				if(fileContent == NULL) {
+					log_info(LOGGER, "File is already open. Retrying");
+					sleep(CONFIG.retry_time_op);
+				}
+			} while(fileContent == NULL);
 
+			if(fileContent != NULL) {
 				pokemon_file * pf = deserialize_pokemon_file(fileContent);
 				find_pokemon_file_line_for_location(pf, npm->x, npm->y)->quantity += npm->count;
 				tall_grass_save_string_in_file("/Pokemon", npm->pokemon, serialize_pokemon_file(pf)->content);
@@ -69,32 +83,9 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 				//TODO Checkear si se guardo el archivo. Sino, quiere decir que otro hilo lo abrió. NO DEBERIA OCURRIR
 
 				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
-				log_info(LOGGER, "%d", CONFIG.broker_socket);
 				if (has_broker_connection == true){
 					send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
-				}else{
-					log_error(LOGGER, "Cannot notify broker");
-				}
-				log_info(LOGGER, "Saved new pokemon location");
-
-			} else {
-
-				//TODO Archivo abierto, reintentar
-
-				do {
-					sleep(CONFIG.retry_time_op);
-					log_info(LOGGER, "File is already open. Retrying");
-					char * fileContent = tall_grass_read_file("/Pokemon", npm->pokemon, false);
-				} while (fileContent == NULL);
-
-				pokemon_file * pf = deserialize_pokemon_file(fileContent);
-				find_pokemon_file_line_for_location(pf, npm->x, npm->y)->quantity += npm->count;
-				tall_grass_save_string_in_file("/Pokemon", npm->pokemon, serialize_pokemon_file(pf)->content);
-
-				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
-				if (has_broker_connection == true){
-					send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
-				}else{
+				} else {
 					log_error(LOGGER, "Cannot notify broker");
 				}
 				log_info(LOGGER, "Saved new pokemon location");
@@ -102,114 +93,79 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 
 			break;
 		case CATCH_POKEMON:;
+		{
 			catch_pokemon_message * chpm = message->payload;
 
 			log_info(LOGGER, "Attempt to catch pokemon %s at [%d::%d]", chpm->pokemon, chpm->x, chpm->y);
 
-			/*
-			 * success = 1
-			 * already_open = -1
-			 * directory_non_existant = -2
-			 * non-existant = -3
-			 * is_directory = -4
-			 * */
-			int open_result = try_open_file("/Pokemon", chpm->pokemon);
-			switch(open_result) {
-				case 1: ;
-					char * fileContent = tall_grass_read_file("/Pokemon", chpm->pokemon, true);
-					if(fileContent != NULL) {
-						pokemon_file * pf = deserialize_pokemon_file(fileContent);
-						pokemon_file_line * line = find_pokemon_file_line_for_location(pf, chpm->x, chpm->y);
-
-						if(line->quantity == 0) {
-							queue_message * response = caught_pokemon_create(0);
-							if (has_broker_connection == true){
-								send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-							}
-							log_info(LOGGER, "Pokemon caught failed");
-						} else {
-							line->quantity--;
-							tall_grass_save_string_in_file("/Pokemon", chpm->pokemon, serialize_pokemon_file(pf)->content);
-
-							queue_message * response = caught_pokemon_create(1);
-							if (has_broker_connection == true){
-								send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-							}
-							log_info(LOGGER, "Pokemon caught successfully");
-						}
-					}
-					break;
-				case -1:
+			char * fileContent = NULL;
+			do {
+				fileContent = tall_grass_read_file("/Pokemon", chpm->pokemon, false);
+				if(fileContent == NULL) {
+					sleep(CONFIG.retry_time_op);
 					log_info(LOGGER, "File is already open. Retrying");
+				}
+			} while(fileContent == NULL);
 
-					do {
-						sleep(CONFIG.retry_time_op);
-						char * fileContent = tall_grass_read_file("/Pokemon", chpm->pokemon, true);
-					} while (fileContent == NULL);
+			if(fileContent != NULL) {
+				pokemon_file * pf = deserialize_pokemon_file(fileContent);
+				pokemon_file_line * line = find_pokemon_file_line_for_location(pf, chpm->x, chpm->y);
 
-					pokemon_file * pf = deserialize_pokemon_file(fileContent);
-					pokemon_file_line * line = find_pokemon_file_line_for_location(pf, chpm->x, chpm->y);
-
-					if(line->quantity == 0) {
-						queue_message * response = caught_pokemon_create(0);
-						if (has_broker_connection == true){
-							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-						}
-						log_info(LOGGER, "Pokemon caught failed");
-					} else {
-						line->quantity--;
-						tall_grass_save_string_in_file("/Pokemon", chpm->pokemon, serialize_pokemon_file(pf)->content);
-
-						queue_message * response = caught_pokemon_create(1);
-						if (has_broker_connection == true){
-							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-						}
-						log_info(LOGGER, "Pokemon caught successfully");
-					}
-
-					break;
-				default:
-					log_error(LOGGER, "File does not exists or is a directory");
+				if(line->quantity == 0) {
 					queue_message * response = caught_pokemon_create(0);
 					if (has_broker_connection == true){
 						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 					}
-					break;
-			}
+					log_info(LOGGER, "Pokemon caught failed");
+				} else {
+					line->quantity--;
+					tall_grass_save_string_in_file("/Pokemon", chpm->pokemon, serialize_pokemon_file(pf)->content);
 
+					queue_message * response = caught_pokemon_create(1);
+					if (has_broker_connection == true){
+						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+					}
+					log_info(LOGGER, "Pokemon caught successfully");
+				}
+			}
+		}
 			break;
 		case GET_POKEMON:;
 		{
 			get_pokemon_message * gpm = message->payload;
-			open_result = try_open_file("/Pokemon", gpm->pokemon);
+			int open_result = 0;
+
+			do {
+				open_result = try_open_file("/Pokemon", gpm->pokemon);
+				if(open_result == -1) {
+					sleep(CONFIG.retry_time_op);
+					log_info(LOGGER, "File is already open. Retrying");
+				}
+			} while(open_result == -1);
 
 			switch(open_result) {
-			case 1: ;
-				char * fileContent = tall_grass_read_file("/Pokemon", gpm->pokemon, true);
-				if(fileContent != NULL) {
-					pokemon_file * pf = deserialize_pokemon_file(fileContent);
+				case 1: ;
+					char * fileContent = tall_grass_read_file("/Pokemon", gpm->pokemon, true);
+					if(fileContent != NULL) {
+						pokemon_file * pf = deserialize_pokemon_file(fileContent);
 
-					t_list* listaPosiciones = list_create();
-					int i;
-					for(i=0; i < pf->locations->elements_count; i++){
-						pokemon_file_line * pfl = list_get(pf->locations, i);
-						list_add(listaPosiciones, pfl->position);
+						t_list* listaPosiciones = list_create();
+						int i;
+						for(i=0; i < pf->locations->elements_count; i++){
+							pokemon_file_line * pfl = list_get(pf->locations, i);
+							list_add(listaPosiciones, pfl->position);
+						}
+						queue_message * response = localized_pokemon_create(gpm->pokemon, listaPosiciones);
+						if (has_broker_connection == true){
+							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+						}
 					}
-					queue_message * response = localized_pokemon_create(gpm->pokemon, listaPosiciones);
-					if (has_broker_connection == true){
-						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-					}
-				}
-
-			break;
-			case -1:
-				log_info(LOGGER, "Pokemon not exists");
 				break;
-			default:
-				log_error(LOGGER, "File does not exists or is a directory");
-				queue_message * response = caught_pokemon_create(0);
-				send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-				break;
+				default:
+					log_error(LOGGER, "File does not exists or is a directory");
+					queue_message * response = caught_pokemon_create(0);
+					send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+					break;
 			}
 			break;
 			default:
@@ -326,8 +282,8 @@ int server_function() {
 				payload->from_broker = 0;
 				payload->message = message;
 
-				pthread_t * the_thread;
-				pthread_create(the_thread, NULL, process_pokemon_message, payload);
+				pthread_t the_thread;
+				pthread_create(&the_thread, NULL, process_pokemon_message, payload);
 				break;
 			default:
 				log_error(LOGGER, "Gamecard received unknown message type %d from external source", header->type);
@@ -400,6 +356,8 @@ void setup_tall_grass() {
 
 		fclose(bitmap_file);
 	}
+
+	opened_files = list_create();
 
 	log_info(LOGGER, "%d total bytes, %d free", tall_grass->total_bytes, tall_grass->free_bytes);
 	debug_bitmap();
@@ -514,6 +472,17 @@ int aux_round_up(int int_value, float float_value) {
 	return float_value - int_value > 0 ? int_value + 1 : int_value;
 }
 
+opened_file * get_opened_file(char * path, char * filename) {
+	int i;
+	for(i=0 ; i<opened_files->elements_count ; i++) {
+		opened_file * f = list_get(opened_files, i);
+		if( strcmp(path, f->path) == 0 && strcmp(filename, f->file) ) {
+			return f;
+		}
+	}
+	return NULL;
+}
+
 /*
  * success = 1
  * already_open = -1
@@ -525,6 +494,22 @@ int try_open_file(char * path, char * filename) {
 	pthread_mutex_lock(&file_operation_mutex);
 
 	char * directory_path = tall_grass_get_or_create_directory(path);
+
+	opened_file * OF = get_opened_file(path, filename);
+	if(OF != NULL) {
+		if(OF->references > 0) {
+			pthread_mutex_unlock(&file_operation_mutex);
+			return -1;
+		}
+	} else {
+		OF = malloc(sizeof(opened_file));
+		OF->references = 0;
+		OF->file = malloc(strlen(filename) + 1);
+		OF->path = malloc(strlen(path) + 1);
+		memcpy(OF->file, filename, strlen(filename) + 1);
+		memcpy(OF->path, path, strlen(path) + 1);
+		list_add(opened_files, OF);
+	}
 
 	if(directory_path == NULL) {
 		log_error(LOGGER, "Cannot open file. Directory doesnt exist");
@@ -549,7 +534,7 @@ int try_open_file(char * path, char * filename) {
 
 	char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
 	if(strcmp(is_directory, "Y") == 0) {
-		log_error(LOGGER, "Cannot close file %s, is a directory", filename);
+		log_error(LOGGER, "Cannot open file %s, is a directory", filename);
 		config_destroy(existing_config);
 		return -4;
 	}
@@ -566,6 +551,7 @@ int try_open_file(char * path, char * filename) {
 	config_set_value(existing_config, "OPEN", "Y");
 	config_save(existing_config);
 
+	OF->references++;
 	pthread_mutex_unlock(&file_operation_mutex);
 
 	return 1;
@@ -573,6 +559,7 @@ int try_open_file(char * path, char * filename) {
 
 int try_close_file(char * path, char * filename) {
 	pthread_mutex_lock(&file_operation_mutex);
+	opened_file * OF = get_opened_file(path, filename);
 
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
@@ -616,6 +603,10 @@ int try_close_file(char * path, char * filename) {
 	config_set_value(existing_config, "OPEN", "N");
 	config_save(existing_config);
 
+	if(OF != NULL) {
+		OF->references--;
+	}
+
 	pthread_mutex_unlock(&file_operation_mutex);
 
 	return true;
@@ -626,7 +617,7 @@ void * tall_grass_read_file(char * path, char * filename, bool pre_opened) {
 
 	if(directory_path == NULL) {
 		log_error(LOGGER, "Cannot read file. Directory does not exist");
-		return false;
+		return NULL;
 	}
 
 	if(!pre_opened) {
