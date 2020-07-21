@@ -594,7 +594,6 @@ void remove_a_partition() {
 }
 void * access_partition(memory_partition * partition) {
 	partition->access_time = get_time_counter();
-	log_info(LOGGER, "Accessing partition %d", partition->number);
 	return partition->partition_start;
 }
 int get_time_counter() {
@@ -689,11 +688,14 @@ void queue_thread_function(message_queue * queue) {
 			tmessage->message->is_serialized = false;
 			tmessage->message->payload = deserialized_message;
 
+			int ap = 0;
+
 			for(j=0 ; j<queue->subscribers->elements_count ; j++) {
-				access_partition(partition);
 				client * tsubscriber = list_get(queue->subscribers, j);
 
 				if(!message_was_sent_to_susbcriber(tmessage, tsubscriber)) {
+
+					ap = 1;
 
 					log_info(LOGGER, "SEND MID %d, TO FD %d", tmessage->message->header->message_id, tsubscriber->socket);
 
@@ -706,6 +708,10 @@ void queue_thread_function(message_queue * queue) {
 					list_add(tmessage->already_sent, tsubscriber);
 				}
 
+			}
+
+			if(ap == 1) {
+				access_partition(partition);
 			}
 
 			destroy_unserialized(deserialized_message, tmessage->message->header->type);
@@ -1077,6 +1083,7 @@ int server_function(int socket) {
 
 					if(message->header->message_id == message_id) {
 					} else {
+						log_info(LOGGER, "  Pre assigned MID %d", message->header->message_id);
 					}
 
 					print_pokemon_message(message);
