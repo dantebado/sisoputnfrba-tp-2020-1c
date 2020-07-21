@@ -659,7 +659,10 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 	}
 	free(aux_str->payload);
 	free(aux_str);
-	log_info(LOGGER, "WRITEN MID %d TO PARTITION %d (%d)", final_message->message->header->message_id, partition->number,
+	log_info(LOGGER, "WRITEN MID %d (correlative %d) TO PARTITION %d (%d)",
+			final_message->message->header->message_id,
+			final_message->message->header->correlative_id,
+			partition->number,
 			partition->partition_start - main_memory);
 	partition->message = final_message;
 	final_message->message->payload = partition;
