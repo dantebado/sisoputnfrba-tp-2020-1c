@@ -18,6 +18,8 @@ typedef struct {
 } opened_file;
 t_list * opened_files;
 
+pthread_mutex_t operation_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 int has_broker_connection = false;
 
 //PROTOTYPES
@@ -48,6 +50,10 @@ void debug_pokemon_file(pokemon_file * pf);
 
 char * int_to_string(int number);
 
+opened_file * get_opened_file(char * path, char * filename);
+opened_file * open_in_table(char * path, char * filename);
+opened_file * close_in_table(char * path, char * filename);
+
 int main(int argc, char **argv) {
 	setup(argc, argv);
 
@@ -61,25 +67,29 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 	internal_broker_need = true;
 
 	print_pokemon_message(message);
+
 	//Message Processing
 	switch(message->header->type) {
 		case NEW_POKEMON:;
 			new_pokemon_message * npm = message->payload;
 
-			char * fileContent = NULL;
+			opened_file * of = NULL;
 			do {
-				fileContent = tall_grass_read_file("/Pokemon", npm->pokemon, false);
-				if(fileContent == NULL) {
+				of = open_in_table("/Pokemon", npm->pokemon);
+				if(of == NULL) {
 					log_info(LOGGER, "File is already open. Retrying");
 					sleep(CONFIG.retry_time_op);
 				}
-			} while(fileContent == NULL);
+			} while(of == NULL);
+
+			char * fileContent = tall_grass_read_file("/Pokemon", npm->pokemon, false);
 
 			if(fileContent != NULL) {
 				pokemon_file * pf = deserialize_pokemon_file(fileContent);
 				find_pokemon_file_line_for_location(pf, npm->x, npm->y)->quantity += npm->count;
 				tall_grass_save_string_in_file("/Pokemon", npm->pokemon, serialize_pokemon_file(pf)->content);
 
+				close_in_table("/Pokemon", npm->pokemon);
 				//TODO Checkear si se guardo el archivo. Sino, quiere decir que otro hilo lo abrió. NO DEBERIA OCURRIR
 
 				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
@@ -172,7 +182,6 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 			break;
 		}
 	}
-
 	internal_broker_need = false;
 
 	return success;
@@ -476,11 +485,43 @@ opened_file * get_opened_file(char * path, char * filename) {
 	int i;
 	for(i=0 ; i<opened_files->elements_count ; i++) {
 		opened_file * f = list_get(opened_files, i);
-		if( strcmp(path, f->path) == 0 && strcmp(filename, f->file) ) {
+		if( strcmp(path, f->path) == 0 && strcmp(filename, f->file) == 0 ) {
 			return f;
 		}
 	}
-	return NULL;
+
+	opened_file * OF = malloc(sizeof(opened_file));
+	OF->references = 0;
+	OF->file = malloc(strlen(filename) + 1);
+	OF->path = malloc(strlen(path) + 1);
+	memcpy(OF->file, filename, strlen(filename) + 1);
+	memcpy(OF->path, path, strlen(path) + 1);
+	list_add(opened_files, OF);
+
+	return OF;
+}
+
+opened_file * open_in_table(char * path, char * filename) {
+	opened_file * of = get_opened_file(path, filename);
+
+	if(of->references > 0) {
+		log_info(LOGGER, " %s %s %d references", of->path, of->file, of->references);
+		return NULL;
+	}
+	of->references++;
+
+	return of;
+}
+
+opened_file * close_in_table(char * path, char * filename) {
+	opened_file * of = get_opened_file(path, filename);
+
+	if(of->references == 0) {
+		return NULL;
+	}
+	of->references--;
+
+	return of;
 }
 
 /*
@@ -494,22 +535,6 @@ int try_open_file(char * path, char * filename) {
 	pthread_mutex_lock(&file_operation_mutex);
 
 	char * directory_path = tall_grass_get_or_create_directory(path);
-
-	opened_file * OF = get_opened_file(path, filename);
-	if(OF != NULL) {
-		if(OF->references > 0) {
-			pthread_mutex_unlock(&file_operation_mutex);
-			return -1;
-		}
-	} else {
-		OF = malloc(sizeof(opened_file));
-		OF->references = 0;
-		OF->file = malloc(strlen(filename) + 1);
-		OF->path = malloc(strlen(path) + 1);
-		memcpy(OF->file, filename, strlen(filename) + 1);
-		memcpy(OF->path, path, strlen(path) + 1);
-		list_add(opened_files, OF);
-	}
 
 	if(directory_path == NULL) {
 		log_error(LOGGER, "Cannot open file. Directory doesnt exist");
@@ -530,9 +555,23 @@ int try_open_file(char * path, char * filename) {
 		pthread_mutex_unlock(&file_operation_mutex);
 		return -3;
 	}
+
+	fseek(file_metadata_file, 0, SEEK_END);
+	int size = ftell(file_metadata_file);
+	log_info(LOGGER, " size %d", size);
+
+	if(size == 0) {
+		pthread_mutex_unlock(&file_operation_mutex);
+		return -1;
+	}
+
+	fseek(file_metadata_file, 0, SEEK_SET);
+
 	t_config * existing_config = config_create(file_metadata_path);
+	log_info(LOGGER, "config_created");
 
 	char * is_directory = config_get_string_value(existing_config, "DIRECTORY");
+	log_info(LOGGER, "is_directory_%s", is_directory);
 	if(strcmp(is_directory, "Y") == 0) {
 		log_error(LOGGER, "Cannot open file %s, is a directory", filename);
 		config_destroy(existing_config);
@@ -540,6 +579,7 @@ int try_open_file(char * path, char * filename) {
 	}
 
 	char * is_open = config_get_string_value(existing_config, "OPEN");
+	log_info(LOGGER, "is_open_%s", is_open);
 	if(strcmp(is_open, "Y") == 0) {
 		log_error(LOGGER, "Cannot open file %s, is already open", filename);
 		config_destroy(existing_config);
@@ -549,17 +589,17 @@ int try_open_file(char * path, char * filename) {
 	}
 
 	config_set_value(existing_config, "OPEN", "Y");
+	log_info(LOGGER, "set_open_%s", is_open);
 	config_save(existing_config);
 
-	OF->references++;
-	pthread_mutex_unlock(&file_operation_mutex);
+	log_info(LOGGER, "save_config");
 
+	pthread_mutex_unlock(&file_operation_mutex);
 	return 1;
 }
 
 int try_close_file(char * path, char * filename) {
 	pthread_mutex_lock(&file_operation_mutex);
-	opened_file * OF = get_opened_file(path, filename);
 
 	char * directory_path = tall_grass_get_or_create_directory(path);
 
@@ -602,10 +642,6 @@ int try_close_file(char * path, char * filename) {
 
 	config_set_value(existing_config, "OPEN", "N");
 	config_save(existing_config);
-
-	if(OF != NULL) {
-		OF->references--;
-	}
 
 	pthread_mutex_unlock(&file_operation_mutex);
 
