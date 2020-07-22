@@ -4,9 +4,8 @@
 gamecard_config CONFIG;
 
 tall_grass_fs * tall_grass;
-pthread_mutex_t directory_operation_mutex;
-
 pthread_mutex_t file_table_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 typedef struct {
 	char * path;
 	char * filename;
@@ -16,12 +15,14 @@ typedef struct {
 t_list * file_table;
 
 int internal_broker_need;
-pthread_mutex_t broker_mutex;
+pthread_mutex_t broker_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_mutex_t op_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int has_broker_connection = false;
 
 //PROTOTYPES
-int process_pokemon_message(gamecard_thread_payload * payload);
+void * process_pokemon_message(gamecard_thread_payload * payload);
 void setup(int argc, char **argv);
 int broker_server_function();
 int server_function();
@@ -49,49 +50,44 @@ int main(int argc, char **argv) {
 	return EXIT_SUCCESS;
 }
 
-int process_pokemon_message(gamecard_thread_payload * payload) {
+void * process_pokemon_message(gamecard_thread_payload * payload) {
 	queue_message * message = payload->message;
 	int from_broker = payload->from_broker;
 
-	internal_broker_need = true;
-
 	int tid = syscall(__NR_gettid);
 
+	internal_broker_need = true;
+
 	print_pokemon_message(message);
-	//Message Processing
+
 	switch(message->header->type) {
 		case NEW_POKEMON:;
 			{
-/*				new_pokemon_message * npm = message->payload;
+				new_pokemon_message * npm = message->payload;
 
-				int open_result = 0;
-				do {
-					open_result = try_open_file("/Pokemon", npm->pokemon);
-					if(open_result == -1) {
-						log_info(LOGGER, "No se pudo abrir %s", npm->pokemon);
-						sleep(CONFIG.retry_time_op);
-					}
-				} while (open_result == -1);
-
-				char * fileContent = tall_grass_read_file("/Pokemon", npm->pokemon);
+				char * fileContent = read_file_content("/Pokemon", npm->pokemon, tid);
 
 				pokemon_file * pf = deserialize_pokemon_file(fileContent);
-				find_pokemon_file_line_for_location(pf, npm->x, npm->y)->quantity += npm->count;
-				tall_grass_save_string_in_file("/Pokemon", npm->pokemon, serialize_pokemon_file(pf)->content);
+				pokemon_file_line * line = find_pokemon_file_line_for_location(pf, npm->x, npm->y);
+				line->quantity += npm->count;
 
-				//TODO Checkear si se guardo el archivo. Sino, quiere decir que otro hilo lo abrió. NO DEBERIA OCURRIR
+				pokemon_file_serialized * serialized = serialize_pokemon_file(pf);
+				write_payload_in_file("/Pokemon", npm->pokemon,
+						serialized->content,
+						serialized->length,
+						tid);
+
+				close_file("/Pokemon", npm->pokemon, tid);
 
 				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
-				if (has_broker_connection == true){
-					log_info(LOGGER, "  Sending APPEARED response");
-					queue_message * br = send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
-					log_info(LOGGER, "    APPEARED response sent with ID %d", br->header->message_id);
-				}else{
+				print_pokemon_message(response);
+				if(has_broker_connection == true) {
+					send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
+				} else {
 					log_error(LOGGER, "Cannot notify broker");
 				}
-				log_info(LOGGER, "Saved new pokemon location");
 
-				try_close_file("/Pokemon", npm->pokemon);
+				log_info(LOGGER, "  Saved new pokemon location");
 			}
 			break;
 		case CATCH_POKEMON:;
@@ -99,117 +95,71 @@ int process_pokemon_message(gamecard_thread_payload * payload) {
 				catch_pokemon_message * chpm = message->payload;
 
 				log_info(LOGGER, "Attempt to catch pokemon %s at [%d::%d]", chpm->pokemon, chpm->x, chpm->y);
+				char * fileContent = read_file_content("/Pokemon", chpm->pokemon, tid);
 
-				int open_result = 0;
-				do {
-					open_result = try_open_file("/Pokemon", chpm->pokemon);
-					if(open_result == -1) {
-						log_info(LOGGER, "No se pudo abrir %s", chpm->pokemon);
-						sleep(CONFIG.retry_time_op);
-					}
-				} while (open_result == -1);
+				if(fileContent != NULL) {
+					pokemon_file * pf = deserialize_pokemon_file(fileContent);
+					pokemon_file_line * line = find_pokemon_file_line_for_location(pf, chpm->x, chpm->y);
 
-				switch(open_result) {
-					case 1: ;
-						char * fileContent = tall_grass_read_file("/Pokemon", chpm->pokemon);
-
-						if(fileContent != NULL) {
-							pokemon_file * pf = deserialize_pokemon_file(fileContent);
-							pokemon_file_line * line = find_pokemon_file_line_for_location(pf, chpm->x, chpm->y);
-
-							if(line->quantity == 0) {
-								queue_message * response = caught_pokemon_create(0);
-								if (has_broker_connection == true){
-									send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-								}
-								log_info(LOGGER, "Pokemon caught failed");
-							} else {
-								line->quantity--;
-								tall_grass_save_string_in_file("/Pokemon", chpm->pokemon, serialize_pokemon_file(pf)->content);
-
-								queue_message * response = caught_pokemon_create(1);
-								if (has_broker_connection == true){
-									send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-								}
-								log_info(LOGGER, "Pokemon caught successfully");
-							}
-						}
-
-						try_close_file("/Pokemon", chpm->pokemon);
-						break;
-					default:
-						log_error(LOGGER, "File does not exists or is a directory");
+					if(line->quantity == 0) {
 						queue_message * response = caught_pokemon_create(0);
+						print_pokemon_message(response);
 						if (has_broker_connection == true){
 							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 						}
-						break;
+						log_info(LOGGER, "Pokemon caught failed");
+					} else {
+						line->quantity--;
+
+						pokemon_file_serialized * serialized = serialize_pokemon_file(pf);
+						write_payload_in_file("/Pokemon", chpm->pokemon,
+								serialized->content,
+								serialized->length,
+								tid);
+
+						queue_message * response = caught_pokemon_create(1);
+						print_pokemon_message(response);
+						if (has_broker_connection == true){
+							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+						}
+						log_info(LOGGER, "Pokemon caught successfully");
+					}
 				}
+
+				close_file("/Pokemon", chpm->pokemon, tid);
 			}
 			break;
 		case GET_POKEMON:;
 			{
 				get_pokemon_message * gpm = message->payload;
 
-				int open_result = 0;
-				do {
-					open_result = try_open_file("/Pokemon", gpm->pokemon);
-					if(open_result == -1) {
-						log_info(LOGGER, "No se pudo abrir %s", gpm->pokemon);
-						sleep(CONFIG.retry_time_op);
-					}
-				} while (open_result == -1);
+				char * fileContent = read_file_content("/Pokemon", gpm->pokemon, tid);
+				close_file("/Pokemon", gpm->pokemon, tid);
 
-				switch(open_result) {
-					case 1: ;
-						char * fileContent = tall_grass_read_file("/Pokemon", gpm->pokemon);
-						if(fileContent != NULL) {
-							pokemon_file * pf = deserialize_pokemon_file(fileContent);
+				pokemon_file * pf = deserialize_pokemon_file(fileContent);
 
-							t_list* listaPosiciones = list_create();
-							int i;
-							for(i=0; i < pf->locations->elements_count; i++){
-								pokemon_file_line * pfl = list_get(pf->locations, i);
-								list_add(listaPosiciones, pfl->position);
-							}
-							queue_message * response = localized_pokemon_create(gpm->pokemon, listaPosiciones);
-							if (has_broker_connection == true){
-								send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-							}
-						}
-
-						try_close_file("/Pokemon", gpm->pokemon);
-						break;
-					default:
-						log_error(LOGGER, "File does not exists or is a directory");
-						queue_message * response = caught_pokemon_create(0);
+				t_list* listaPosiciones = list_create();
+				int i;
+				for(i=0; i < pf->locations->elements_count; i++){
+					pokemon_file_line * pfl = list_get(pf->locations, i);
+					list_add(listaPosiciones, pfl->position);
+				}
+				queue_message * response = localized_pokemon_create(gpm->pokemon, listaPosiciones);
+				print_pokemon_message(response);
+				if(listaPosiciones->elements_count > 0) {
+					if (has_broker_connection == true){
 						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
-						break;
-				}*/
+					}
+				} else {
+					log_info(LOGGER, "  No hubo posiciones");
+				}
 			}
 	}
 
 	internal_broker_need = false;
+	log_info(LOGGER, "Fin de la Operación");
+	pthread_mutex_unlock(&op_mutex);
 
-	return success;
-}
-
-typedef struct {
-	char * filename;
-	char * payload;
-	int sleep_milis;
-} test_struct;
-
-void * test_table(test_struct * test) {
-	int tid = syscall(__NR_gettid);
-	usleep(test->sleep_milis * 1000);
-	read_file_content("/Pokemon", test->filename, tid);
-	return NULL;
-}
-void * test_table_wr(test_struct * test) {
-	int tid = syscall(__NR_gettid);
-	usleep(test->sleep_milis * 1000);
-	write_payload_in_file("/Pokemon", test->filename, test->payload, strlen(test->payload), tid);
 	return NULL;
 }
 
@@ -234,49 +184,9 @@ void setup(int argc, char **argv) {
 
 	log_info(LOGGER, "Configuration Loaded");
 
-	pthread_mutex_init(&broker_mutex, NULL);
-
 	internal_broker_need = false;
-
 	file_table = list_create();
-
 	setup_tall_grass();
-
-	{
-		test_struct * str = malloc(sizeof(test_struct));
-		str->sleep_milis = 0;
-		str->filename = malloc(50);
-		strcpy(str->filename, "Pikachu");
-		str->payload = malloc(120);
-		strcpy(str->payload, "Gonzalo Springhart");
-
-		pthread_t the_thread;
-		pthread_create(&the_thread, NULL, test_table, str);
-	}
-	{
-		test_struct * str = malloc(sizeof(test_struct));
-		str->sleep_milis = 500;
-		str->filename = malloc(50);
-		strcpy(str->filename, "Pikachu");
-		str->payload = malloc(120);
-		strcpy(str->payload, "Damian Facchini");
-
-		pthread_t the_thread;
-		pthread_create(&the_thread, NULL, test_table_wr, str);
-	}
-	{
-		test_struct * str = malloc(sizeof(test_struct));
-		str->sleep_milis = 30 * 1000;
-		str->filename = malloc(50);
-		strcpy(str->filename, "Pikachu");
-		str->payload = malloc(120);
-		strcpy(str->payload, "Gonzalo Springhart");
-
-		pthread_t the_thread;
-		pthread_create(&the_thread, NULL, test_table, str);
-	}
-
-	while(1);
 
 	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
@@ -294,12 +204,11 @@ void setup(int argc, char **argv) {
 }
 
 char * build_full_path(char * path, char * filename) {
-	char * fp = malloc(strlen(path) + 1 + strlen(filename) + 1);
-	fp[0] = '\0';
+	char * fp = string_new();
 
-	strcat(fp, path);
-	strcat(fp, "/");
-	strcat(fp, filename);
+	string_append(&fp, path);
+	string_append(&fp, "/");
+	string_append(&fp, filename);
 
 	return fp;
 }
@@ -308,8 +217,8 @@ file_table_entry * find_entry(char * path, char * filename) {
 	for(int i=0 ; i<file_table->elements_count ; i++) {
 		file_table_entry * te = list_get(file_table, i);
 		if(
-			strcmp(path, te->path) == 0 &&
-			strcmp(filename, te->filename) == 0
+			string_equals_ignore_case(path, te->path) &&
+			string_equals_ignore_case(filename, te->filename)
 		) {
 			return te;
 		}
@@ -318,10 +227,8 @@ file_table_entry * find_entry(char * path, char * filename) {
 	file_table_entry * te = malloc(sizeof(file_table_entry));
 	te->references = 0;
 	te->last_reference = 0;
-	te->path = malloc(sizeof(path));
-	te->filename = malloc(sizeof(filename));
-	strcpy(te->path, path);
-	strcpy(te->filename, filename);
+	te->path = string_duplicate(path);
+	te->filename = string_duplicate(filename);
 
 	list_add(file_table, te);
 
@@ -337,15 +244,16 @@ int open_file(char * path, char * filename, int tid) {
 	pthread_mutex_lock(&file_table_mutex);
 
 	file_table_entry * entry = find_entry(path, filename);
-	if(entry->references > 0 && entry->last_reference != tid) {
+
+	if(entry->references > 0 && entry->last_reference != tid && entry->last_reference != 0) {
 		pthread_mutex_unlock(&file_table_mutex);
 		return -1;
 	}
 
-	entry->last_reference = tid;
-	entry->references++;
-
-	log_info(LOGGER, "%d abre %s", tid, filename);
+	if(entry->last_reference != tid) {
+		entry->last_reference = tid;
+		entry->references++;
+	}
 
 	pthread_mutex_unlock(&file_table_mutex);
 	return 0;
@@ -359,11 +267,9 @@ int close_file(char * path, char * filename, int tid) {
 	if(entry->last_reference == tid) {
 		entry->last_reference = 0;
 		entry->references--;
-		log_info(LOGGER, "%d ciera %s", tid, filename);
 		pthread_mutex_unlock(&file_table_mutex);
 		return 0;
-	} else {
-	}
+	} else { }
 
 	pthread_mutex_unlock(&file_table_mutex);
 	return -1;
@@ -371,36 +277,35 @@ int close_file(char * path, char * filename, int tid) {
 
 t_config * get_config_for_file(char * path, char * filename) {
 	char * full_path = build_full_path(path, filename);
-	char * metadata_path = malloc(strlen(CONFIG.tallgrass_mounting_point) + 1 + strlen(full_path) + 1 + 12 + 1);
+	char * metadata_path = malloc(255);
 	metadata_path[0] = '\0';
 
-	char * metadata_directory = malloc(strlen(CONFIG.tallgrass_mounting_point) + 1 + strlen(full_path) + 1);
+	char * metadata_directory = malloc(255);
 	metadata_directory[0] = '\0';
 
-	strcat(metadata_path, CONFIG.tallgrass_mounting_point);
-	strcat(metadata_directory, CONFIG.tallgrass_mounting_point);
-	strcat(metadata_path, "/Files");
-	strcat(metadata_directory, "/Files");
-	strcat(metadata_path, full_path);
-	strcat(metadata_directory, full_path);
-	strcat(metadata_path, "/");
-	strcat(metadata_path, "Metadata.bin");
+	string_append(&metadata_path, CONFIG.tallgrass_mounting_point);
+	string_append(&metadata_directory, CONFIG.tallgrass_mounting_point);
+	string_append(&metadata_path, "/Files");
+	string_append(&metadata_directory, "/Files");
+	string_append(&metadata_path, full_path);
+	string_append(&metadata_directory, full_path);
+	string_append(&metadata_path, "/Metadata.bin");
 
 	int just_created = 0;
 	FILE * fmetadata = fopen(metadata_path, "r");
 	if(fmetadata == NULL) {
 		char * mkdircommand = malloc(6 + strlen(metadata_directory));
 		mkdircommand[0] = '\0';
-		strcat(mkdircommand, "mkdir ");
-		strcat(mkdircommand, metadata_directory);
+		string_append(&mkdircommand, "mkdir ");
+		string_append(&mkdircommand, metadata_directory);
 		system(mkdircommand);
 
 		fmetadata = fopen(metadata_path, "w");
 		just_created = 1;
 	}
+	fclose(fmetadata);
 	t_config * cfg = config_create(metadata_path);
 	if(just_created == 1) {
-		fclose(fmetadata);
 		config_set_value(cfg, "DIRECTORY", "N");
 		config_set_value(cfg, "SIZE", "0");
 		config_set_value(cfg, "BLOCKS", "[]");
@@ -422,10 +327,12 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 
 	int necessary_blocks = aux_round_up(payload_size / tall_grass->block_size,
 								payload_size / (float)tall_grass->block_size);
+	int existing_size = config_get_int_value(config, "SIZE");
 
 	char ** allocated_blocks = config_get_array_value(config, "BLOCKS");
-	int existing_blocks = aux_round_up(config_get_int_value(config, "SIZE") / tall_grass->block_size,
-			config_get_int_value(config, "SIZE") / (float)tall_grass->block_size);
+
+	int existing_blocks = aux_round_up(existing_size / tall_grass->block_size,
+								existing_size / (float)tall_grass->block_size);
 	int blocks_left = necessary_blocks - existing_blocks;
 
 	t_list * blocks = list_create();
@@ -438,6 +345,7 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 		memcpy(pint, &int_block, sizeof(int));
 		list_add(blocks, pint);
 	}
+
 	if(blocks_left > 0) {
 		t_list * more_blocks = find_free_blocks(blocks_left);
 		if(more_blocks == NULL) {
@@ -449,40 +357,37 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 			int * some_block = list_get(more_blocks, k);
 			list_add(blocks, some_block);
 		}
-		list_destroy(more_blocks);
 	}
 
-	char * blocks_for_config = malloc(blocks->elements_count * 3);
-	blocks_for_config[0] = '\0';
-	strcat(blocks_for_config, "[");
+	char * blocks_for_config = string_new();
+	string_append(&blocks_for_config, "[");
 
 	int written_bytes = 0, gonzalo = 0;
 	do {
 		int * _b = list_get(blocks, gonzalo);
 		int bn = *_b;
 
+		char * this_block_as_string = int_to_string(bn);
+
+		if(gonzalo != 0) {
+			string_append(&blocks_for_config, ",");
+		}
+		string_append(&blocks_for_config, this_block_as_string);
+
 		int this_block_size = payload_size - written_bytes;
 		if(this_block_size > tall_grass->block_size) {
 			this_block_size = tall_grass->block_size;
 		}
-		char * block_payload = malloc(this_block_size + 1);
+
+		char * block_payload = malloc(this_block_size);
 		memcpy(block_payload, payload + written_bytes, this_block_size);
-		block_payload[this_block_size] = '\0';
 
-		char * this_block_as_string = int_to_string(bn);
+		char * this_block_metadata_path = string_new();
 
-		if(gonzalo != 0) {
-			strcat(blocks_for_config, ",");
-		}
-		strcat(blocks_for_config, this_block_as_string);
-
-		char * this_block_metadata_path = malloc( strlen(CONFIG.tallgrass_mounting_point) + 13 + strlen(this_block_as_string) );
-		this_block_metadata_path[0] = '\0';
-
-		strcat(this_block_metadata_path, CONFIG.tallgrass_mounting_point);
-		strcat(this_block_metadata_path, "/Blocks/");
-		strcat(this_block_metadata_path, this_block_as_string);
-		strcat(this_block_metadata_path, ".bin");
+		string_append(&this_block_metadata_path, CONFIG.tallgrass_mounting_point);
+		string_append(&this_block_metadata_path, "/Blocks/");
+		string_append(&this_block_metadata_path, this_block_as_string);
+		string_append(&this_block_metadata_path, ".bin");
 
 		FILE * block_file = fopen(this_block_metadata_path, "w");
 		fwrite(block_payload, this_block_size, 1, block_file);
@@ -490,12 +395,10 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 
 		bitarray_set_bit(tall_grass->bitmap, bn);
 
-		free(_b);
-		free(block_payload);
 		gonzalo++;
 		written_bytes += this_block_size;
 	} while (written_bytes < payload_size);
-	strcat(blocks_for_config, "]");
+	string_append(&blocks_for_config, "]");
 
 	while(gonzalo < blocks->elements_count) {
 		int * v = list_get(blocks, gonzalo);
@@ -509,11 +412,6 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 	config_save(config);
 
 	log_info(LOGGER, "   TID %d escribio %d bytes en %s", tid, written_bytes, filename);
-
-	sleep(6);
-
-	close_file(path, filename, tid);
-
 	return NULL;
 }
 
@@ -533,8 +431,7 @@ char * read_file_content(char * path, char * filename, int tid) {
 
 	int file_size = config_get_int_value(config, "SIZE");
 
-	char * content = malloc(file_size);
-	content[0] = '\0';
+	char * content = string_new();
 
 	int o, readed_bytes = 0;
 	for(o=0 ; o<existing_blocks ; o++) {
@@ -548,29 +445,26 @@ char * read_file_content(char * path, char * filename, int tid) {
 			to_read_bytes = tall_grass->block_size;
 		}
 
-		char * this_block_metadata_path = malloc( strlen(CONFIG.tallgrass_mounting_point) + 13 + strlen(this_block_as_string) );
-		this_block_metadata_path[0] = '\0';
+		char * this_block_metadata_path = string_new();
 
-		strcat(this_block_metadata_path, CONFIG.tallgrass_mounting_point);
-		strcat(this_block_metadata_path, "/Blocks/");
-		strcat(this_block_metadata_path, this_block_as_string);
-		strcat(this_block_metadata_path, ".bin");
+		string_append(&this_block_metadata_path, CONFIG.tallgrass_mounting_point);
+		string_append(&this_block_metadata_path, "/Blocks/");
+		string_append(&this_block_metadata_path, this_block_as_string);
+		string_append(&this_block_metadata_path, ".bin");
 
 		FILE * block_file = fopen(this_block_metadata_path, "r");
 
-		char * this_block_content = malloc(sizeof(to_read_bytes));
+		char * this_block_content = malloc(to_read_bytes + 1);
 		fread(this_block_content, to_read_bytes, 1, block_file);
 		this_block_content[to_read_bytes] = '\0';
 
-		strcat(content, this_block_content);
+		string_append(&content, this_block_content);
 
 		fclose(block_file);
 		readed_bytes += to_read_bytes;
 	}
 
-	log_info(LOGGER, "   TID %d leyó %d (%s) bytes en %s", tid, readed_bytes, content, filename);
-	sleep(6);
-	close_file(path, filename, tid);
+	log_info(LOGGER, "   TID %d leyó %d bytes en %s", tid, readed_bytes, filename);
 	return content;
 }
 
@@ -604,16 +498,15 @@ int broker_server_function() {
 		pthread_mutex_lock(&broker_mutex);
 		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
 		if(!internal_broker_need) {
-			read(CONFIG.broker_socket, header, sizeof(net_message_header));
+			pthread_mutex_lock(&op_mutex);
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
-			send_message_acknowledge(message, CONFIG.broker_socket);
 
 			gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
-			payload->from_broker = 1;
+			payload->from_broker = 0;
 			payload->message = message;
 
-			pthread_t the_thread;
-			pthread_create(&the_thread, NULL, process_pokemon_message, payload);
+			pthread_t request_thread;
+			pthread_create(&request_thread, NULL, &process_pokemon_message, payload);
 		}
 		pthread_mutex_unlock(&broker_mutex);
 	}
@@ -630,14 +523,15 @@ int server_function() {
 	void incoming(int fd, char * ip, int port, net_message_header * header) {
 		switch(header->type) {
 			case NEW_MESSAGE:;
+				pthread_mutex_lock(&op_mutex);
 				queue_message * message = receive_pokemon_message(fd);
 
 				gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
 				payload->from_broker = 0;
 				payload->message = message;
 
-				pthread_t * the_thread;
-				pthread_create(the_thread, NULL, process_pokemon_message, payload);
+				pthread_t request_thread;
+				pthread_create(&request_thread, NULL, &process_pokemon_message, payload);
 				break;
 			default:
 				log_error(LOGGER, "Gamecard received unknown message type %d from external source", header->type);
@@ -652,7 +546,6 @@ int server_function() {
 
 void setup_tall_grass() {
 	log_info(LOGGER, "Starting TallGrass");
-	pthread_mutex_init(&directory_operation_mutex, NULL);
 
 	char * _tall_grass_metadata_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
 	string_append(&_tall_grass_metadata_path, "/Metadata/Metadata.bin");
@@ -720,7 +613,6 @@ void save_bitmap() {
 	fwrite(tall_grass->bitmap->bitarray, tall_grass->blocks / 8, 1, bitmap_file);
 
 	fclose(bitmap_file);
-	free(_tall_grass_bitmap_path);
 }
 
 void debug_bitmap() {
@@ -759,8 +651,8 @@ pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf) {
 	pokemon_file_serialized * data = malloc(sizeof(pokemon_file_serialized));
 
 	int f;
-	char * contents = malloc(1); contents[0] = '\0';
-	int contents_length = 1;
+	char * contents = string_new();
+	int contents_length = 0;
 	for(f=0 ; f<pf->locations->elements_count ; f++) {
 		pokemon_file_line * tl = list_get(pf->locations, f);
 
@@ -769,14 +661,14 @@ pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf) {
 			char * _y = int_to_string(tl->position->y);
 			char * _q = int_to_string(tl->quantity);
 
-			contents_length += strlen(_x) + 1 + strlen(_y) + 1 +
-					strlen(_q) + 1;
-
 			string_append(&contents, _x);
 			string_append(&contents, "-");
 			string_append(&contents, _y);
 			string_append(&contents, "=");
 			string_append(&contents, _q);
+
+			contents_length += strlen(_x) + 1 + strlen(_y) + 1 +
+					strlen(_q) + 1;
 
 			if(f < pf->locations->elements_count - 1) {
 				string_append(&contents, "\n");
@@ -787,7 +679,7 @@ pokemon_file_serialized * serialize_pokemon_file(pokemon_file * pf) {
 	contents[contents_length-1] = '\0';
 
 	data->content = contents;
-	data->length = strlen(contents) + 1;
+	data->length = contents_length;
 
 	return data;
 }
@@ -805,7 +697,7 @@ int count_character_in_string(char*str, char character) {
 pokemon_file * deserialize_pokemon_file(char * contents) {
 	pokemon_file * file = pokemon_file_create();
 
-	if(strcmp("", contents) == 0) {
+	if(string_equals_ignore_case(contents, "")) {
 		return file;
 	}
 
@@ -815,7 +707,7 @@ pokemon_file * deserialize_pokemon_file(char * contents) {
 	int a;
 	for(a=0 ; a<lines_q && lines[a] != NULL ; a++) {
 		char * line = lines[a];
-		if(strcmp(line, "") != 0) {
+		if(!string_equals_ignore_case(line, "")) {
 			int x, y, q;
 			sscanf(line, "%d-%d=%d", &x, &y, &q);
 			list_add(file->locations, pokemon_file_line_create(x, y, q));
