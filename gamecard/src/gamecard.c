@@ -499,6 +499,7 @@ int broker_server_function() {
 		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
 		if(!internal_broker_need) {
 			pthread_mutex_lock(&op_mutex);
+			read(CONFIG.broker_socket, header, sizeof(net_message_header));
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
 
 			gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
