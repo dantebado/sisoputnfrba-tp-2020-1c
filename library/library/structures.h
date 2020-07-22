@@ -163,6 +163,9 @@ typedef struct {
 	int access_time;
 	int entry_time;
 	broker_message * message;
+	//_message_queue_name tipo_cola; // = QUEUE_NEW_POKEMON;
+	char * tipo_cola;
+	int id_message;
 } memory_partition;
 
 /*

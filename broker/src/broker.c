@@ -86,7 +86,6 @@ client * add_or_get_client(int socket, char * ip, int port);
 void my_handler(int signum);
 
 int main(int argc, char **argv) {
-
 	setup(argc, argv);
 
 	return EXIT_SUCCESS;
@@ -99,7 +98,9 @@ int main(int argc, char **argv) {
  * */
 
 void setup(int argc, char **argv) {
+
 	char * cfg_path = string_new();
+
 	string_append(&cfg_path, (argc > 1) ? argv[1] : "broker");
 	string_append(&cfg_path, ".cfg");
 	_CONFIG = config_create(cfg_path);
@@ -153,6 +154,8 @@ void setup(int argc, char **argv) {
 
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
 	pthread_join(CONFIG.server_thread, NULL);
+
+	//print_partitions_info();
 }
 
 /*
@@ -401,6 +404,8 @@ memory_partition * partition_create(int number, int size, void * start, broker_m
 	partition->access_time = get_time_counter();
 	partition->entry_time = get_time_counter();
 	partition->message = message;
+	partition->tipo_cola = "";
+	partition->id_message = 0;
 	return partition;
 }
 void print_partitions_info() {
@@ -414,9 +419,10 @@ void print_partitions_info() {
 	log_info(LOGGER, "-------------------------------------------------------");
 }
 void print_partition_info(int n, memory_partition * partition) {
-	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>\tET<%d>",
+	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>\tET<%d>\tCOLA:<%s>\tID:<%d>",
 			partition->number, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
-			partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time, partition->entry_time);
+			partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time, partition->entry_time,
+			partition->tipo_cola, partition->id_message);
 }
 void free_memory_partition(memory_partition * partition) {
 	int i, j;
@@ -665,6 +671,10 @@ int add_message_to_queue(queue_message * message, _message_queue_name queue_name
 			partition->number,
 			partition->partition_start - main_memory);
 	partition->message = final_message;
+
+	partition->tipo_cola = enum_to_queue_name(queue_name);
+	partition->id_message = message->header->message_id;
+
 	final_message->message->payload = partition;
 	final_message->payload_address_copy = partition;
 
