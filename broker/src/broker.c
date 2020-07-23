@@ -692,14 +692,13 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 	message->message->payload = deserialized_message;
 
 	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
-		log_info(LOGGER, "SENDING MID %d, TO FD %d", message->message->header->message_id, subscriber->socket);
-		log_info(LOGGER, "  Waiting Answering flag from %d", subscriber->socket);
+		log_info(LOGGER, "Sending %d, to FD %d", message->message->header->message_id, subscriber->socket);
 		pthread_mutex_lock(&(subscriber->access_answering));
-		log_info(LOGGER, "    Flag %d OK", subscriber->socket);
+		log_info(LOGGER, "    Flag %d available", subscriber->socket);
 			send_pokemon_message_with_id(subscriber->socket, message->message, 0,
 					message->message->header->message_id,
 					message->message->header->correlative_id);
-		log_info(LOGGER, "  SENT MID %d, TO FD %d", message->message->header->message_id, subscriber->socket);
+		log_info(LOGGER, "    MID %d, sent to FD %d", message->message->header->message_id, subscriber->socket);
 		list_add(message->already_sent, subscriber);
 
 		access_partition(partition);
@@ -718,7 +717,10 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 void broadcast_message(broker_message * message) {
 	log_info(LOGGER, "Broadcasting %d", message->message->header->message_id);
 	message_queue * queue = find_queue_by_name(message->message->header->queue);
-	log_info(LOGGER, "  Queue has %d subs", queue->subscribers->elements_count);
+	if(queue->subscribers->elements_count == 0) {
+		log_info(LOGGER, "  Queue has no subscribers. Skipping.");
+		return;
+	}
 	for(int i=0 ; i<queue->subscribers->elements_count ; i++) {
 		client * subscriber = list_get(queue->subscribers, i);
 		send_message_to_client(message, subscriber);
@@ -1072,13 +1074,13 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 		case READY_TO_RECIEVE:;
 			{
 				tsub->ready_to_recieve = 1;
-				log_info(LOGGER, "FD %d Ready To Recieve Data", fd);
+				log_info(LOGGER, "FD %d is now ready to recieve data", fd);
 				post_uswmal = 1;
 			}
 			break;
 		case PROCESSED:;
 			{
-				log_info(LOGGER, "  %d Answered Completition", tsub->socket);
+				log_info(LOGGER, "  %d completed previous message processing", tsub->socket);
 				pthread_mutex_unlock(&(tsub->access_answering));
 			}
 			break;
@@ -1102,7 +1104,7 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 				queue_message * message = receive_pokemon_message(fd);
 
 				if(message->header->message_id != message_id) {
-					log_info(LOGGER, "  Pre assigned MID %d", message->header->message_id);
+					log_info(LOGGER, "  Message had pre assigned MID %d", message->header->message_id);
 				}
 
 				print_pokemon_message(message);
@@ -1117,7 +1119,6 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 
 	tsub->doing_internal_work = 0;
 	pthread_mutex_unlock(&tsub->access_mutex);
-	log_info(LOGGER, "Mutex de cliente desbloqueado");
 
 	if(post_uswmal == 1) {
 		update_subscriber_with_messages_all_queues(tsub);
@@ -1233,8 +1234,6 @@ int server_function(int socket) {
 								log_trace(LOGGER, "Closed and freed connection for index %d, socket %d", i, sd);
 							} else {
 								{
-									log_info(LOGGER, "- %d Type Recieved %d", bytesread, incoming->type);
-
 									//INCOMING MESSAGE
 									//incoming_message(client_socket, string_duplicate(str), address.sin_port, incoming);
 

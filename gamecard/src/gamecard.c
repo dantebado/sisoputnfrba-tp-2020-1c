@@ -16,9 +16,7 @@ t_list * file_table;
 
 int internal_broker_need;
 pthread_mutex_t broker_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 pthread_mutex_t op_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 int has_broker_connection = false;
 
 //PROTOTYPES

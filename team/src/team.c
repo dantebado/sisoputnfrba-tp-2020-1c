@@ -3,17 +3,11 @@
 //GLOBAL VARIABLES
 team_config CONFIG;
 
-int internal_broker_need;
-
 int has_broker_connection = false;
 
-int internal_broker_need = 0;
-
 t_list * trainers;
-
 t_list * global_requirements;
 //Son los pokemones que el team necesita EN TOTAL
-
 t_list * deadlock_groups;
 
 pthread_mutex_t required_pokemons_mutex;
@@ -27,12 +21,12 @@ trainer * executing_trainer;
 
 //SEMAPHORES
 pthread_mutex_t executing_mutex;
-pthread_mutex_t broker_mutex;
+pthread_mutex_t broker_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t internal_need_mutex = PTHREAD_MUTEX_INITIALIZER;
+int internal_broker_need;
 
 pthread_t * exec_thread;
-
 t_list * get_pokemon_msgs_ids;
-
 
 //STATISTICS
 team_statistics * statistics;
@@ -83,6 +77,19 @@ t_list * all_combinations_of_size(t_list * all_trainers, int size);
 void combinations(t_list * all_trainers, int, int length, int start_position,
 		t_list * current_result, t_list * all_results);
 
+int set_internal_need(int value) {
+	pthread_mutex_lock(&internal_need_mutex);
+	internal_broker_need = value;
+	pthread_mutex_unlock(&internal_need_mutex);
+	return internal_broker_need;
+}
+int get_internal_need() {
+	int value = 0;
+	pthread_mutex_lock(&internal_need_mutex);
+	value = internal_broker_need;
+	pthread_mutex_unlock(&internal_need_mutex);
+	return value;
+}
 
 //Main
 int main(int argc, char **argv) {
@@ -112,9 +119,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 	//Aca estoy suscrito a las colas del broker, que me va a ir pasando mensajes
 	//No voy a manejar todos los tipos de mensajes, solo los que debo como proceso
 
-	internal_broker_need = 1;
 	print_pokemon_message(message);
-
 	//Message Processing
 	switch(message->header->type) {
 		//APPEARED, GET, CATCH, LOCALIZED, CAUGHT
@@ -144,26 +149,30 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 			{
 				caught_pokemon_message * ctpm = message->payload;
 
+				log_info(LOGGER, "Correlativo de %d es %d",
+						message->header->correlative_id,
+						message->header->message_id
+				);
+
 				int i;
 				for(i=0 ; i<trainers->elements_count ; i++){
 					trainer * ttrainer = list_get(trainers, i);
-
 					if(ttrainer->stats->current_activity != NULL) {
 						if(ttrainer->stats->current_activity->correlative_id_awaiting == message->header->correlative_id) {
 							if(ttrainer->stats->current_activity->type == AWAITING_CAPTURE_RESULT) {
 
-								//log_info(LOGGER, "Trainer %d was expecting this message", ttrainer->id);
+								log_info(LOGGER, "Trainer %d was expecting answer to MID %d",
+										ttrainer->id,
+										message->header->correlative_id);
 
 								if(ctpm->result) {
 									appeared_pokemon_message * tapm = ttrainer->stats->current_activity->data;
 									list_add(ttrainer->pokemons, tapm->pokemon);
-									log_info(LOGGER, "Trainer %d has captured his objective successfully!");
+									log_info(LOGGER, "Trainer %d has captured his objective successfully!", ttrainer->id);
 
 									_diff_my_caught_pokemons(ttrainer);
 									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
 									treq->total_caught++;
-
-									//print_current_requirements();
 
 									if(is_trainer_completed(ttrainer)){
 										ttrainer->stats->status = EXIT_ACTION;
@@ -183,7 +192,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 										detect_circular_chains();
 									}
 								} else {
-									log_info(LOGGER, "Trainer %d could not capture his objective!");
+									log_info(LOGGER, "Trainer %d could not capture his objective!", ttrainer->id);
 								}
 
 								free(ttrainer->stats->current_activity);
@@ -221,9 +230,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 		already_processed(CONFIG.broker_socket);
 	}
 
-	internal_broker_need = 0;
+	set_internal_need(0);
 	pthread_mutex_unlock(&broker_mutex);
-	log_info(LOGGER, "FReed broker mutex");
 
 	return 1;
 }
@@ -279,7 +287,6 @@ void set_required_pokemons(){
 }
 
 void * send_gets(void * n) {
-	sleep(2);
 	for(int i=0 ; i<global_requirements->elements_count ; i++) {
 		pokemon_requirement * treq = list_get(global_requirements, i);
 		queue_message * msg = get_pokemon_create(treq->name);
@@ -295,12 +302,15 @@ void * send_gets(void * n) {
 	}
 
 	log_info(LOGGER, "Sending RTR %d", ready_to_recieve(CONFIG.broker_socket));
-	internal_broker_need = 0;
+
+	set_internal_need(0);
 	pthread_mutex_unlock(&broker_mutex);
 	return NULL;
 }
 
 int broker_server_function() {
+	set_internal_need(0);
+
 	int success_listening = failed;
 	do {
 		log_info(LOGGER, "Attempting to connect to broker");
@@ -325,24 +335,27 @@ int broker_server_function() {
 	log_info(LOGGER, "Subscribing to Queue CAUGHT_POKEMON");
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CAUGHT_POKEMON);
 
-	pthread_t get_thread;
 	pthread_mutex_lock(&broker_mutex);
-	internal_broker_need = 1;
+	set_internal_need(1);
+	pthread_t get_thread;
 	pthread_create(&get_thread, NULL, &send_gets, NULL);
 
 	while(1) {
+		void * buffer = malloc(1);
 		net_message_header * header = malloc(sizeof(net_message_header));
 
-		log_info(LOGGER, "Awaiting message from Broker");
-		int recvcheck = recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
+		log_info(LOGGER, "Awaiting data from Broker");
+		recv(CONFIG.broker_socket, buffer, 1, MSG_PEEK);
+		free(buffer);
+
+		log_info(LOGGER, "  Hay data en el buffer de Broker");
 
 		pthread_mutex_lock(&broker_mutex);
-		log_info(LOGGER, "Internal need %d", internal_broker_need);
-		if(internal_broker_need == 0) {
-			read(CONFIG.broker_socket, header, sizeof(net_message_header));
+		if(get_internal_need() == 0) {
+			recv(CONFIG.broker_socket, header, sizeof(net_message_header), 0);
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
 			send_message_acknowledge(message, CONFIG.broker_socket);
-
+			set_internal_need(1);
 			process_pokemon_message(message, 1);
 		}
 	}
@@ -435,8 +448,6 @@ void setup(int argc, char **argv) {
 	CONFIG.team_port = config_get_int_value(_CONFIG, "PUERTO_TEAM");
 	CONFIG.initial_estimate = config_get_int_value(_CONFIG, "ESTIMACION_INICIAL");
 
-	internal_broker_need = false;
-
 	statistics = malloc(sizeof(team_statistics));
 
 	statistics->context_switch_counter = 0;
@@ -451,7 +462,6 @@ void setup(int argc, char **argv) {
 	executing_trainer = NULL;
 
 	pthread_mutex_init(&required_pokemons_mutex, NULL);
-	pthread_mutex_init(&broker_mutex, NULL);
 
 	if((CONFIG.internal_socket = create_socket()) == failed) {
 		log_info(LOGGER, "Cannot create socket");
@@ -720,14 +730,9 @@ int need_that_pokemon(trainer * myself, char * suspected_pokemon){
 
 void executing(trainer * t){
 	//Es el entrenador ejecutando acciones
-	//log_info(LOGGER, "Init thread, trainer %d", t->id);
-
 	int trading_counter = 0, i;
-
 	while(1){
 		pthread_mutex_lock(&t->stats->mutex);
-		pthread_mutex_lock(&broker_mutex);
-		internal_broker_need = 1;
 
 		log_info(LOGGER, "Trainer %d is executing! He is the first in ready queue", t->id);
 
@@ -755,8 +760,6 @@ void executing(trainer * t){
 
 					if(move_to(t, apm->x, apm->y)) {
 						queue_message * msg = catch_pokemon_create(apm->pokemon, apm->x, apm->y);
-
-						internal_broker_need = true;
 						log_info(LOGGER, "\tIs already there, sending catch msg");
 
 						executing_trainer = NULL;
@@ -769,13 +772,15 @@ void executing(trainer * t){
 						}
 
 						if(has_broker_connection == true) {
-							send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+							pthread_mutex_lock(&broker_mutex);
+							log_info(LOGGER, "Broker mutex was available");
+								send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+								t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
+								t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
+								t->stats->status = BLOCKED_ACTION;
 
-							t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
-
-							log_info(LOGGER, "\t\tCatch msg sent with ID %d", t->stats->current_activity->correlative_id_awaiting);
-							t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
-							t->stats->status = BLOCKED_ACTION;
+								log_info(LOGGER, "\t\tNow Trainer %d is waiting for capture ID %d", t->id, t->stats->current_activity->correlative_id_awaiting);
+							pthread_mutex_unlock(&broker_mutex);
 						}else {
 							list_add(t->pokemons, apm->pokemon);
 
@@ -947,8 +952,6 @@ void executing(trainer * t){
 			t->stats->quantum_counter = 0;
 		}
 
-		internal_broker_need = 0;
-		pthread_mutex_unlock(&broker_mutex);
 		pthread_mutex_unlock(&executing_mutex);
 	}
 }
@@ -991,12 +994,11 @@ void compute_pending_actions() {
 
 void exec_thread_function() {
 	while(!is_globally_completed()) {
+		usleep(CONFIG.cpu_delay * 1000 * 1000);
 		log_info(LOGGER, "Planning & Sorting Queues");
 
 		compute_pending_actions();
 		sort_queues();
-
-		usleep(CONFIG.cpu_delay * 1000 * 1000);
 		if(executing_trainer != NULL) {
 			pthread_mutex_lock(&executing_mutex);
 			pthread_mutex_unlock(&executing_trainer->stats->mutex);
