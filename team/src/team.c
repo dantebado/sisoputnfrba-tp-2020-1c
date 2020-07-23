@@ -111,6 +111,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 	//No voy a manejar todos los tipos de mensajes, solo los que debo como proceso
 
 	print_pokemon_message(message);
+
 	//Message Processing
 	switch(message->header->type) {
 		//APPEARED, GET, CATCH, LOCALIZED, CAUGHT
@@ -136,11 +137,6 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 				}
 			}
 			break;
-		case CATCH_POKEMON:;
-			catch_pokemon_message * chpm = message->payload;
-			break;
-			//El catch se manda al broker durante el executing del entrenador...
-
 		case CAUGHT_POKEMON:;
 			{
 				caught_pokemon_message * ctpm = message->payload;
@@ -196,11 +192,6 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 				}
 			}
 			break;
-		case GET_POKEMON:;
-			get_pokemon_message * gpm = message->payload;
-			break;
-			//El get se manda automaticamente en broker_server_function cuando arranca el team...
-
 		case LOCALIZED_POKEMON:;
 			localized_pokemon_message * lpm = message->payload;
 			{
@@ -229,6 +220,10 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 			break;
 		default:
 			break;
+	}
+
+	if(from_broker) {
+		already_processed(CONFIG.broker_socket);
 	}
 	return 1;
 }
@@ -320,12 +315,16 @@ int broker_server_function() {
 		list_add(get_pokemon_msgs_ids, tid);
 	}
 
-	log_info(LOGGER, "Awaiting message from Broker");
+	ready_to_recieve(CONFIG.broker_socket);
+
 	while(1) {
 		net_message_header * header = malloc(sizeof(net_message_header));
 
-		pthread_mutex_lock(&broker_mutex);
+		log_info(LOGGER, "Awaiting message from Broker");
 		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
+
+		pthread_mutex_lock(&broker_mutex);
+		log_info(LOGGER, "Internal need %d", internal_broker_need);
 		if(!internal_broker_need) {
 			read(CONFIG.broker_socket, header, sizeof(net_message_header));
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);

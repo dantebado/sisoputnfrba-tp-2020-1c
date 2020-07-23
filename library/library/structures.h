@@ -14,7 +14,9 @@ typedef enum {
 	OPT_OK,
 	OPT_FAILED,
 	NEW_MESSAGE,
-	MESSAGE_ACK
+	MESSAGE_ACK,
+	READY_TO_RECIEVE,
+	PROCESSED
 } net_message_type;
 
 typedef struct {
@@ -131,15 +133,19 @@ typedef struct {
 	int socket;
 	char * ip;
 	int port;
-	pthread_mutex_t mutex;
+	int ready_to_recieve;
+	int doing_internal_work;
+	t_list * queues;
+	pthread_mutex_t access_mutex;
+	pthread_mutex_t access_answering;
 } client __attribute__((packed));
 
 typedef struct {
 	_message_queue_name name;
 	t_list * subscribers;
 	t_list * messages;
-	pthread_mutex_t mutex;
 	pthread_t thread;
+	pthread_mutex_t access_mutex;
 } message_queue __attribute__((packed));
 
 typedef struct {

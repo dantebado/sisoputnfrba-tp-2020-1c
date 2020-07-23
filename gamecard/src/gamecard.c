@@ -56,10 +56,8 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 
 	int tid = syscall(__NR_gettid);
 
-	internal_broker_need = true;
-
+	internal_broker_need = 1;
 	print_pokemon_message(message);
-
 	switch(message->header->type) {
 		case NEW_POKEMON:;
 			{
@@ -82,6 +80,8 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
 				print_pokemon_message(response);
 				if(has_broker_connection == true) {
+					log_info(LOGGER, "Broker connection active");
+					log_info(LOGGER, "Sending answer");
 					send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
 				} else {
 					log_error(LOGGER, "Cannot notify broker");
@@ -120,6 +120,8 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 						queue_message * response = caught_pokemon_create(1);
 						print_pokemon_message(response);
 						if (has_broker_connection == true){
+							log_info(LOGGER, "Broker connection active");
+							log_info(LOGGER, "Sending answer");
 							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 						}
 						log_info(LOGGER, "Pokemon caught successfully");
@@ -148,6 +150,8 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 				print_pokemon_message(response);
 				if(listaPosiciones->elements_count > 0) {
 					if (has_broker_connection == true){
+						log_info(LOGGER, "Broker connection active");
+						log_info(LOGGER, "Sending answer");
 						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 					}
 				} else {
@@ -156,9 +160,13 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 			}
 	}
 
-	internal_broker_need = false;
-	log_info(LOGGER, "Fin de la Operación");
+	if(from_broker == 1) {
+		already_processed(CONFIG.broker_socket);
+	}
+
+	internal_broker_need = 0;
 	pthread_mutex_unlock(&op_mutex);
+	pthread_mutex_unlock(&broker_mutex);
 
 	return NULL;
 }
@@ -184,7 +192,7 @@ void setup(int argc, char **argv) {
 
 	log_info(LOGGER, "Configuration Loaded");
 
-	internal_broker_need = false;
+	internal_broker_need = 0;
 	file_table = list_create();
 	setup_tall_grass();
 
@@ -491,25 +499,28 @@ int broker_server_function() {
 	log_info(LOGGER, "Subscribing to Queue GET_POKEMON");
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_GET_POKEMON);
 
-	log_info(LOGGER, "Awaiting message from Broker");
+	ready_to_recieve(CONFIG.broker_socket);
+
 	while(1) {
 		net_message_header * header = malloc(sizeof(net_message_header));
 
-		pthread_mutex_lock(&broker_mutex);
+		log_info(LOGGER, "Awaiting message from Broker");
 		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
-		if(!internal_broker_need) {
+
+		pthread_mutex_lock(&broker_mutex);
+		log_info(LOGGER, "Internal need %d", internal_broker_need);
+		if(internal_broker_need == 0) {
 			pthread_mutex_lock(&op_mutex);
 			read(CONFIG.broker_socket, header, sizeof(net_message_header));
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
+			send_message_acknowledge(message, CONFIG.broker_socket);
 
 			gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
-			payload->from_broker = 0;
+			payload->from_broker = 1;
 			payload->message = message;
 
-			pthread_t request_thread;
-			pthread_create(&request_thread, NULL, &process_pokemon_message, payload);
+			process_pokemon_message(payload);
 		}
-		pthread_mutex_unlock(&broker_mutex);
 	}
 
 	return 0;

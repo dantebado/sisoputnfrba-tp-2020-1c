@@ -124,6 +124,9 @@ void _command_subscribe_to_queue(_message_queue_name queue, int seconds, gameboy
 	pthread_t awaiting_thread;
 	pthread_create(&awaiting_thread, NULL, await, NULL);
 	subscribe_to_queue(broker_socket, queue);
+
+	ready_to_recieve(broker_socket);
+
 	void * listen() {
 		printf("Aguardando mensajes...\n\n");
 		while(reading) {
@@ -136,6 +139,7 @@ void _command_subscribe_to_queue(_message_queue_name queue, int seconds, gameboy
 			printf("Mensaje entrante con MID %d\n", message->header->message_id);
 			print_pokemon_message_by_printf(message);
 			printf("\n");
+			already_processed(broker_socket);
 		}
 		return NULL;
 	}

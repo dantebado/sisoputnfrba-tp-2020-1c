@@ -42,6 +42,7 @@ int send_header(int socket, net_message_header * header);
 
 
 /*BROKER*/
+int ready_to_recieve(int broker_socket);
 int subscribe_to_queue(int broker_socket, _message_queue_name queue);
 int unsubscribe_from_queue(int broker_socket, _message_queue_name queue);
 queue_message * send_pokemon_message(int socket, queue_message * message, int going_to_broker, int correlative_id);

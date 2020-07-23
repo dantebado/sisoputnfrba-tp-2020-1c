@@ -302,6 +302,18 @@ int start_server(int socket,
 
 
 /*BROKER*/
+int ready_to_recieve(int broker_socket) {
+	net_message_header header;
+	header.type = READY_TO_RECIEVE;
+	send_header(broker_socket, &header);
+	return 1;
+}
+int already_processed(int broker_socket) {
+	net_message_header header;
+	header.type = PROCESSED;
+	send_header(broker_socket, &header);
+	return 1;
+}
 int subscribe_to_queue(int broker_socket, _message_queue_name queue) {
 	net_message_header header;
 	header.type = NEW_SUBSCRIPTION;
@@ -322,6 +334,7 @@ int unsubscribe_from_queue(int broker_socket, _message_queue_name queue) {
 	send_header(broker_socket, &header);
 
 	send_int(broker_socket, queue);
+	log_info(LOGGER, "  ese");
 	int result = recv_int(broker_socket);
 	if(result != OPT_OK) {
 		log_error(LOGGER, "Error Subscribing");
@@ -677,7 +690,12 @@ client * build_client(int socket, char * ip, int port) {
 	c->ip = ip;
 	c->socket = socket;
 	c->port = port;
-	pthread_mutex_init(&c->mutex, NULL);
+	c->ready_to_recieve = 0;
+	c->queues = list_create();
+	c->doing_internal_work = 0;
+
+	pthread_mutex_init(&(c->access_mutex), NULL);
+	pthread_mutex_init(&(c->access_answering), NULL);
 	return c;
 }
 
