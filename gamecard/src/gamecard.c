@@ -103,7 +103,10 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 						queue_message * response = caught_pokemon_create(0);
 						print_pokemon_message(response);
 						if (has_broker_connection == true){
-							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+							log_info(LOGGER, "  Broker connection active");
+							log_info(LOGGER, "  Sending failed answer");
+							response = send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+							log_info(LOGGER, "  Response was assigned MID %d", response->header->message_id, response->header->correlative_id);
 						}
 						log_info(LOGGER, "Pokemon catch failed");
 					} else {
@@ -118,9 +121,10 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 						queue_message * response = caught_pokemon_create(1);
 						print_pokemon_message(response);
 						if (has_broker_connection == true){
-							log_info(LOGGER, "Broker connection active");
-							log_info(LOGGER, "Sending answer");
+							log_info(LOGGER, "  Broker connection active");
+							log_info(LOGGER, "  Sending caught answer");
 							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
+							log_info(LOGGER, "  Response was assigned MID %d", response->header->message_id, response->header->correlative_id);
 						}
 						log_info(LOGGER, "Pokemon caught successfully");
 					}
@@ -158,7 +162,7 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 			}
 	}
 
-	if(from_broker == 1) {
+	if(from_broker == 1 && has_broker_connection) {
 		already_processed(CONFIG.broker_socket);
 	}
 

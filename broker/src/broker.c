@@ -691,10 +691,12 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 	message->message->is_serialized = false;
 	message->message->payload = deserialized_message;
 
-	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
-		log_info(LOGGER, "Sending %d, to FD %d", message->message->header->message_id, subscriber->socket);
-		pthread_mutex_lock(&(subscriber->access_answering));
-		log_info(LOGGER, "    Flag %d available", subscriber->socket);
+	log_info(LOGGER, "Sending %d, to FD %d", message->message->header->message_id, subscriber->socket);
+	pthread_mutex_lock(&(subscriber->ready_to_recieve_mutex));
+	pthread_mutex_lock(&(subscriber->access_answering));
+
+	if(!message_was_sent_to_susbcriber(message, subscriber)) {
+		log_info(LOGGER, "    Flag %d available to send %d", subscriber->socket, message->message->header->message_id);
 			send_pokemon_message_with_id(subscriber->socket, message->message, 0,
 					message->message->header->message_id,
 					message->message->header->correlative_id);
@@ -706,12 +708,20 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 		destroy_unserialized(deserialized_message, message->message->header->type);
 		message->message->is_serialized = true;
 		message->message->payload = partition;
-		return 1;
-	}
 
-	destroy_unserialized(deserialized_message, message->message->header->type);
-	message->message->is_serialized = true;
-	message->message->payload = partition;
+		log_info(LOGGER, "    MID %d ready for more operations", message->message->header->message_id);
+		pthread_mutex_unlock(&(subscriber->ready_to_recieve_mutex));
+		return 1;
+	} else {
+
+		destroy_unserialized(deserialized_message, message->message->header->type);
+		message->message->is_serialized = true;
+		message->message->payload = partition;
+		log_info(LOGGER, "    MID %d ready for more operations", message->message->header->message_id);
+		pthread_mutex_unlock(&(subscriber->access_answering));
+		pthread_mutex_unlock(&(subscriber->ready_to_recieve_mutex));
+		return 0;
+	}
 	return 0;
 }
 void broadcast_message(broker_message * message) {
@@ -1064,6 +1074,8 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 	int port = data->port;
 	net_message_header * header = data->header;
 
+	int pid = syscall(__NR_gettid);
+
 	int time_req = get_time_counter();
 	client * tsub = add_or_get_client(fd, ip, port);
 
@@ -1073,14 +1085,14 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 	switch(header->type) {
 		case READY_TO_RECIEVE:;
 			{
-				tsub->ready_to_recieve = 1;
-				log_info(LOGGER, "FD %d is now ready to recieve data", fd);
+				log_info(LOGGER, "FD %d is now ready to recieve data PID (%d)", fd, pid);
+				pthread_mutex_unlock(&(tsub->ready_to_recieve_mutex));
 				post_uswmal = 1;
 			}
 			break;
 		case PROCESSED:;
 			{
-				log_info(LOGGER, "  %d completed previous message processing", tsub->socket);
+				log_info(LOGGER, "  %d completed previous message processing PID (%d)", tsub->socket, pid);
 				pthread_mutex_unlock(&(tsub->access_answering));
 			}
 			break;
@@ -1107,6 +1119,8 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 					log_info(LOGGER, "  Message had pre assigned MID %d", message->header->message_id);
 				}
 
+				log_info(LOGGER, "MID %d processed in PID %d", message->header->message_id, pid);
+
 				print_pokemon_message(message);
 				broker_answer = add_message_to_queue(message, message->header->queue);
 			}
@@ -1118,6 +1132,7 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 	}
 
 	tsub->doing_internal_work = 0;
+	log_info(LOGGER, "Done Thread PID %d", pid);
 	pthread_mutex_unlock(&tsub->access_mutex);
 
 	if(post_uswmal == 1) {
@@ -1171,6 +1186,7 @@ int server_function(int socket) {
 			}
 		}
 
+		log_info(LOGGER, "Waiting for new activity on broker socket");
 		activity = select(max_sd + 1, &readfds, NULL, NULL, NULL);
 		if (activity < 0) {
 			log_error(LOGGER, "Error on listening activity");
@@ -1214,38 +1230,43 @@ int server_function(int socket) {
 					char str[INET_ADDRSTRLEN];
 					inet_ntop(AF_INET, &(address.sin_addr), str, INET_ADDRSTRLEN);
 
+					void * buffer = malloc(1);
+
 					client * tsub = add_or_get_client(client_socket, str, address.sin_port);
-					int checkrecv = recv(client_socket, incoming, sizeof(net_message_header), MSG_PEEK);
+					log_info(LOGGER, "Recieving From %d", sd);
+					int checkrecv = recv(client_socket, buffer, 1, MSG_PEEK);
+					log_info(LOGGER, "   Recieved %d", sd, checkrecv);
+					free(buffer);
 
-					if(checkrecv > 0) {
-						pthread_mutex_lock(&tsub->access_mutex);
-						if(tsub->doing_internal_work == 0) {
-							tsub->doing_internal_work = 1;
+					usleep(500 * 1000);
+					pthread_mutex_lock(&tsub->access_mutex);
+					if(tsub->doing_internal_work == 0) {
+						tsub->doing_internal_work = 1;
 
-							if ((bytesread = recv(client_socket, incoming, sizeof(net_message_header), 0)) <= 1) {
-								{
-									//LOST CONNECTION
-									//lost_connection(client_socket, string_duplicate(str), address.sin_port);
-									log_info(LOGGER, "Lost connection of %d", sd);
-									remove_client(sd, str, address.sin_port);
-								}
-								close(sd);
-								client_socket_array[i] = 0;
-								log_trace(LOGGER, "Closed and freed connection for index %d, socket %d", i, sd);
-							} else {
-								{
-									//INCOMING MESSAGE
-									//incoming_message(client_socket, string_duplicate(str), address.sin_port, incoming);
+						if ((bytesread = recv(client_socket, incoming, sizeof(net_message_header), 0)) <= 0) {
+							{
+								//LOST CONNECTION
+								//lost_connection(client_socket, string_duplicate(str), address.sin_port);
+								log_info(LOGGER, "Lost connection of %d", sd);
+								remove_client(sd, str, address.sin_port);
+								unsubscribe_socket_from_all_queues(sd, str, address.sin_port);
+							}
+							close(sd);
+							client_socket_array[i] = 0;
+							log_trace(LOGGER, "Closed and freed connection for index %d, socket %d", i, sd);
+						} else {
+							{
+								//INCOMING MESSAGE
+								//incoming_message(client_socket, string_duplicate(str), address.sin_port, incoming);
 
-									handle_incoming_struct * data = malloc(sizeof(handle_incoming_struct));
-									data->fd = client_socket;
-									data->ip = str;
-									data->port = address.sin_port;
-									data->header = incoming;
+								handle_incoming_struct * data = malloc(sizeof(handle_incoming_struct));
+								data->fd = client_socket;
+								data->ip = str;
+								data->port = address.sin_port;
+								data->header = incoming;
 
-									pthread_t handling_thread;
-									pthread_create(&handling_thread, NULL, &handle_incoming_as_thread, data);
-								}
+								pthread_t handling_thread;
+								pthread_create(&handling_thread, NULL, &handle_incoming_as_thread, data);
 							}
 						}
 					}

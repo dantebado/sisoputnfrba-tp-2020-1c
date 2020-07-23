@@ -150,8 +150,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 				caught_pokemon_message * ctpm = message->payload;
 
 				log_info(LOGGER, "Correlativo de %d es %d",
-						message->header->correlative_id,
-						message->header->message_id
+						message->header->message_id,
+						message->header->correlative_id
 				);
 
 				int i;
@@ -226,7 +226,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 			break;
 	}
 
-	if(from_broker == 1) {
+	if(from_broker == 1 && has_broker_connection) {
 		already_processed(CONFIG.broker_socket);
 	}
 
@@ -298,6 +298,8 @@ void * send_gets(void * n) {
 		int * tid = malloc(sizeof(int));
 		memcpy(tid, &msg->header->message_id, sizeof(int));
 
+		log_info(LOGGER, "  GET was assigned MID %d", *tid);
+
 		list_add(get_pokemon_msgs_ids, tid);
 	}
 
@@ -336,9 +338,7 @@ int broker_server_function() {
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CAUGHT_POKEMON);
 
 	pthread_mutex_lock(&broker_mutex);
-	set_internal_need(1);
-	pthread_t get_thread;
-	pthread_create(&get_thread, NULL, &send_gets, NULL);
+	send_gets(NULL);
 
 	while(1) {
 		void * buffer = malloc(1);
@@ -348,9 +348,9 @@ int broker_server_function() {
 		recv(CONFIG.broker_socket, buffer, 1, MSG_PEEK);
 		free(buffer);
 
-		log_info(LOGGER, "  Hay data en el buffer de Broker");
-
 		pthread_mutex_lock(&broker_mutex);
+
+		log_info(LOGGER, "  Hay data en el buffer de Broker");
 		if(get_internal_need() == 0) {
 			recv(CONFIG.broker_socket, header, sizeof(net_message_header), 0);
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
@@ -597,6 +597,7 @@ void setup(int argc, char **argv) {
 	//CREAMOS SOCKET DE ESCUCHA CON EL BROKER
 
 	CONFIG.broker_socket = create_socket();
+	log_info(LOGGER, "Broker socket %d", CONFIG.broker_socket);
 	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, CONFIG.broker_socket);
 
 	exec_thread = malloc(sizeof(pthread_t));

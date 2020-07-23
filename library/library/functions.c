@@ -499,6 +499,8 @@ queue_message * send_message_acknowledge(queue_message * message, int broker_soc
 
 	send_int(broker_socket, message->header->message_id);
 
+	log_info(LOGGER, "Sent Ack MID %d", message->header->message_id);
+
 	return message;
 }
 
@@ -690,11 +692,12 @@ client * build_client(int socket, char * ip, int port) {
 	c->ip = ip;
 	c->socket = socket;
 	c->port = port;
-	c->ready_to_recieve = 0;
 	c->queues = list_create();
 	c->doing_internal_work = 0;
 	c->just_created = 1;
 
+	pthread_mutex_init(&(c->ready_to_recieve_mutex), NULL);
+	pthread_mutex_lock(&(c->ready_to_recieve_mutex));
 	pthread_mutex_init(&(c->access_mutex), NULL);
 	pthread_mutex_init(&(c->access_answering), NULL);
 	return c;

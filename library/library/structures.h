@@ -133,11 +133,11 @@ typedef struct {
 	int socket;
 	char * ip;
 	int port;
-	int ready_to_recieve;
 	int doing_internal_work;
 	int just_created;
 	t_list * queues;
 	pthread_mutex_t access_mutex;
+	pthread_mutex_t ready_to_recieve_mutex;
 	pthread_mutex_t access_answering;
 } client __attribute__((packed));
 
