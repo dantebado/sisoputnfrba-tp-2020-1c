@@ -693,6 +693,7 @@ client * build_client(int socket, char * ip, int port) {
 	c->ready_to_recieve = 0;
 	c->queues = list_create();
 	c->doing_internal_work = 0;
+	c->just_created = 1;
 
 	pthread_mutex_init(&(c->access_mutex), NULL);
 	pthread_mutex_init(&(c->access_answering), NULL);

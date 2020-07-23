@@ -80,6 +80,7 @@ int destroy_unserialized(void * payload, pokemon_message_type type);
 //CLIENTS
 int is_same_client(client * c1, client * c2);
 client * add_or_get_client(int socket, char * ip, int port);
+client * remove_client(int socket, char * ip, int port);
 
 //SIGNAL
 void my_handler(int signum);
@@ -499,7 +500,6 @@ void compact_memory(int already_reserved_mutex) {
 	switch(CONFIG.memory_alg) {
 		case PARTITIONS:
 			{
-				log_info(LOGGER, "START COMPACTING");
 				int free_s = 0, removed = 0;
 				void * last_ptr = main_memory;
 				for(i=0 ; i<partitions->elements_count ; i++) {
@@ -520,12 +520,11 @@ void compact_memory(int already_reserved_mutex) {
 				if(free_s > 0) {
 					list_add(partitions, partition_create(partitions->elements_count, free_s, last_ptr, NULL));
 				}
-				log_info(LOGGER, "DONE COMPACTING");
+				log_info(LOGGER, "COMPACTING");
 			}
 			break;
 		case BUDDY_SYSTEM:;
 			{
-				log_info(LOGGER, "START BD ASSOCIATION");
 				int was_change = false;
 				do {
 					was_change = false;
@@ -554,7 +553,7 @@ void compact_memory(int already_reserved_mutex) {
 						}
 					}
 				} while(was_change);
-				log_info(LOGGER, "DONE BD ASSOCIATION");
+				log_info(LOGGER, "BD ASSOCIATION");
 			}
 			break;
 	}
@@ -694,11 +693,14 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 
 	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
 		log_info(LOGGER, "SENDING MID %d, TO FD %d", message->message->header->message_id, subscriber->socket);
-			log_info(LOGGER, "  SENT MID %d, TO FD %d", message->message->header->message_id, subscriber->socket);
+		log_info(LOGGER, "  Waiting Answering flag from %d", subscriber->socket);
+		pthread_mutex_lock(&(subscriber->access_answering));
+		log_info(LOGGER, "    Flag %d OK", subscriber->socket);
 			send_pokemon_message_with_id(subscriber->socket, message->message, 0,
 					message->message->header->message_id,
 					message->message->header->correlative_id);
-		list_add(message->already_sent, message);
+		log_info(LOGGER, "  SENT MID %d, TO FD %d", message->message->header->message_id, subscriber->socket);
+		list_add(message->already_sent, subscriber);
 
 		access_partition(partition);
 
@@ -719,20 +721,16 @@ void broadcast_message(broker_message * message) {
 	log_info(LOGGER, "  Queue has %d subs", queue->subscribers->elements_count);
 	for(int i=0 ; i<queue->subscribers->elements_count ; i++) {
 		client * subscriber = list_get(queue->subscribers, i);
-		pthread_mutex_lock(&(subscriber->access_answering));
 		send_message_to_client(message, subscriber);
 	}
 }
 void update_subscriber_with_messages_for_queue(message_queue * queue, client * subscriber) {
-	pthread_mutex_lock(&(queue->access_mutex));
 	for(int i=0 ; i<queue->messages->elements_count ; i++) {
 		broker_message * message = list_get(queue->messages, i);
 		send_message_to_client(message, subscriber);
 	}
-	pthread_mutex_unlock(&(queue->access_mutex));
 }
 void update_subscriber_with_messages_all_queues(client * subscriber) {
-	log_info(LOGGER, "Suscrito a %d colas", subscriber->queues->elements_count);
 	for(int l=0 ; l<subscriber->queues->elements_count ; l++) {
 		message_queue * queue = list_get(subscriber->queues, l);
 		update_subscriber_with_messages_for_queue(queue, subscriber);
@@ -1067,12 +1065,15 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 	int time_req = get_time_counter();
 	client * tsub = add_or_get_client(fd, ip, port);
 
+	int post_uswmal = 0;
+	broker_message * broker_answer = NULL;
+
 	switch(header->type) {
 		case READY_TO_RECIEVE:;
 			{
 				tsub->ready_to_recieve = 1;
 				log_info(LOGGER, "FD %d Ready To Recieve Data", fd);
-				update_subscriber_with_messages_all_queues(tsub);
+				post_uswmal = 1;
 			}
 			break;
 		case PROCESSED:;
@@ -1105,10 +1106,7 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 				}
 
 				print_pokemon_message(message);
-				broker_message * broker_answer = add_message_to_queue(message, message->header->queue);
-				if(broker_answer != NULL) {
-					broadcast_message(broker_answer);
-				} else { }
+				broker_answer = add_message_to_queue(message, message->header->queue);
 			}
 			break;
 		case MESSAGE_ACK:;
@@ -1119,6 +1117,14 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 
 	tsub->doing_internal_work = 0;
 	pthread_mutex_unlock(&tsub->access_mutex);
+	log_info(LOGGER, "Mutex de cliente desbloqueado");
+
+	if(post_uswmal == 1) {
+		update_subscriber_with_messages_all_queues(tsub);
+	}
+	if(broker_answer != NULL) {
+		broadcast_message(broker_answer);
+	}
 
 	return NULL;
 }
@@ -1164,7 +1170,6 @@ int server_function(int socket) {
 			}
 		}
 
-		log_trace(LOGGER, "Awaiting message");
 		activity = select(max_sd + 1, &readfds, NULL, NULL, NULL);
 		if (activity < 0) {
 			log_error(LOGGER, "Error on listening activity");
@@ -1182,7 +1187,6 @@ int server_function(int socket) {
 					{
 						//NEW CONNECTION
 						//new_connection(new_socket, string_duplicate(str), address.sin_port);
-						log_info(LOGGER, "NEW CONNECTION from FD %d", new_socket);
 					}
 
 					int registered = 0;
@@ -1210,32 +1214,39 @@ int server_function(int socket) {
 					inet_ntop(AF_INET, &(address.sin_addr), str, INET_ADDRSTRLEN);
 
 					client * tsub = add_or_get_client(client_socket, str, address.sin_port);
+					int checkrecv = recv(client_socket, incoming, sizeof(net_message_header), MSG_PEEK);
 
-					int checkrecv = recv(client_socket, incoming, 1, MSG_PEEK);
-					if(checkrecv > 0 && tsub->doing_internal_work == 0) {
-						tsub->doing_internal_work = 1;
+					if(checkrecv > 0) {
+						pthread_mutex_lock(&tsub->access_mutex);
+						if(tsub->doing_internal_work == 0) {
+							tsub->doing_internal_work = 1;
 
-						if ((bytesread = read(client_socket, incoming, sizeof(net_message_header))) <= 0) {
-							{
-								//LOST CONNECTION
-								//lost_connection(client_socket, string_duplicate(str), address.sin_port);
-							}
-							close(sd);
-							client_socket_array[i] = 0;
-							log_trace(LOGGER, "Closed and freed connection for index %d, socket %d", i, sd);
-						} else {
-							{
-								//INCOMING MESSAGE
-								//incoming_message(client_socket, string_duplicate(str), address.sin_port, incoming);
+							if ((bytesread = recv(client_socket, incoming, sizeof(net_message_header), 0)) <= 1) {
+								{
+									//LOST CONNECTION
+									//lost_connection(client_socket, string_duplicate(str), address.sin_port);
+									log_info(LOGGER, "Lost connection of %d", sd);
+									remove_client(sd, str, address.sin_port);
+								}
+								close(sd);
+								client_socket_array[i] = 0;
+								log_trace(LOGGER, "Closed and freed connection for index %d, socket %d", i, sd);
+							} else {
+								{
+									log_info(LOGGER, "- %d Type Recieved %d", bytesread, incoming->type);
 
-								handle_incoming_struct * data = malloc(sizeof(handle_incoming_struct));
-								data->fd = client_socket;
-								data->ip = str;
-								data->port = address.sin_port;
-								data->header = incoming;
+									//INCOMING MESSAGE
+									//incoming_message(client_socket, string_duplicate(str), address.sin_port, incoming);
 
-								pthread_t handling_thread;
-								pthread_create(&handling_thread, NULL, &handle_incoming_as_thread, data);
+									handle_incoming_struct * data = malloc(sizeof(handle_incoming_struct));
+									data->fd = client_socket;
+									data->ip = str;
+									data->port = address.sin_port;
+									data->header = incoming;
+
+									pthread_t handling_thread;
+									pthread_create(&handling_thread, NULL, &handle_incoming_as_thread, data);
+								}
 							}
 						}
 					}
@@ -1343,25 +1354,21 @@ int is_same_client(client * c1, client * c2) {
 			(c1->port == c2->port && strcmp(c2->ip, c1->ip) == 0));
 }
 
-client * add_or_get_client_and_lock_doing(int socket, char * ip, int port, int doing) {
+client * remove_client(int socket, char * ip, int port) {
 	pthread_mutex_lock(&clients_mutex);
 	int i;
 	for(i=0 ; i<clients->elements_count ; i++) {
 		client * oc = list_get(clients, i);
 		if(oc->socket == socket ||
-				(oc->port == port && strcmp(oc->ip, ip) == 0)) {
-			oc->doing_internal_work = doing;
+			(oc->port == port && strcmp(oc->ip, ip) == 0)) {
+			list_remove(clients, i);
 			pthread_mutex_unlock(&clients_mutex);
 			return oc;
 		}
 	}
-	client * c = build_client(socket, ip, port);
-	list_add(clients, c);
-	c->doing_internal_work = doing;
 	pthread_mutex_unlock(&clients_mutex);
-	return c;
+	return NULL;
 }
-
 client * add_or_get_client(int socket, char * ip, int port) {
 	pthread_mutex_lock(&clients_mutex);
 	int i;
@@ -1369,6 +1376,7 @@ client * add_or_get_client(int socket, char * ip, int port) {
 		client * oc = list_get(clients, i);
 		if(oc->socket == socket ||
 				(oc->port == port && strcmp(oc->ip, ip) == 0)) {
+			oc->just_created = 0;
 			pthread_mutex_unlock(&clients_mutex);
 			return oc;
 		}
