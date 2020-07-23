@@ -562,7 +562,7 @@ void setup(int argc, char **argv) {
 	}*/
 
 	deadlock_groups = all_possible_combinations(trainers);
-	log_info(LOGGER, "$asadas");
+	log_infor(LOGGER, "Team setup has been loaded!");
 	//TODO debug de deadlock
 	//detect_circular_chains();
 
@@ -770,7 +770,7 @@ void executing(trainer * t){
 							pokemon_requirement * treq = find_requirement_by_pokemon_name(apm->pokemon);
 							treq->total_caught++;
 
-							log_info(LOGGER, "Capture registered successfully");
+							log_info(LOGGER, "Capture registered successfully due to unconnected broker");
 							print_current_requirements();
 
 							t->stats->current_activity = NULL;
@@ -810,7 +810,6 @@ void executing(trainer * t){
 				trainer * trading_trainer = t->stats->current_activity->data;
 				//log_info(LOGGER, "\tIs trading with %d at %d %d", trading_trainer->id, trading_trainer->x, trading_trainer->y);
 
-				log_info(LOGGER, "Trading Counter %d", trading_counter);
 				if(move_to(t, trading_trainer->x, trading_trainer->y)) {
 					void _trade(trainer * self, trainer * friend){
 						char * tmp_pokemon;
@@ -843,7 +842,7 @@ void executing(trainer * t){
 								if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0) {
 									list_remove(to->targets, j);
 									list_remove(from->pokemons, i);
-									log_info(LOGGER, "Trainer %d le pasó un %s a %d", from->id, tmp_pokemon, to->id);
+									log_info(LOGGER, "Trainer %d has given %s to %d", from->id, tmp_pokemon, to->id);
 								}
 							}
 						}
@@ -861,7 +860,7 @@ void executing(trainer * t){
 									reverse_trading = 1;
 									list_remove(to->targets, j);
 									list_remove(from->pokemons, i);
-									log_info(LOGGER, "Trainer %d le pasó un %s a %d", from->id, tmp_pokemon, to->id);
+									log_info(LOGGER, "Trainer %d has given %s to %d", from->id, tmp_pokemon, to->id);
 								}
 							}
 						}
@@ -876,7 +875,7 @@ void executing(trainer * t){
 									if(strcmp(tmp_pokemon, another_tmp_pokemon) == 0) {
 										list_remove(from->pokemons, i);
 										list_add(to->pokemons, tmp_pokemon);
-										log_info(LOGGER, "Trainer %d le pasó un %s a %d", from->id, tmp_pokemon, to->id);
+										log_info(LOGGER, "Trainer %d has given %s to %d", from->id, tmp_pokemon, to->id);
 									}
 								}
 							}
@@ -884,6 +883,7 @@ void executing(trainer * t){
 					}
 					if(trading_counter < 5){
 						//El entrenador espera...
+						log_info(LOGGER, "Trainer %d is trading with %d! (counter %d)", t->id, trading_trainer->id, trading_counter);
 						trading_counter++;
 					}else{
 						_trade(t, trading_trainer);
@@ -977,7 +977,7 @@ void compute_pending_actions() {
 
 void exec_thread_function() {
 	while(!is_globally_completed()) {
-		log_info(LOGGER, "Planning");
+		log_info(LOGGER, "Planning & Sorting Queues");
 
 		compute_pending_actions();
 		sort_queues();
@@ -1207,39 +1207,3 @@ void solve_deadlock_for(t_list * tg, trainer * root){
 		}
 	}
 }
-
-
-
-
-
-
-
-/*
- //Esta parte podria volar?
-		//Te vas fijando si cada grupo tiene un deadlock y lo tratas en el momento
-		//detect_deadlock_from
-		if(compute_deadlocks(tg)){
-			int is_in_deadlock = true;
-
-			for(int j=1; j<tg->elements_count; j++){
-				t_list * aux_trainer_list = list_create();
-				if(!exists_path_to(list_get(tg, j), list_get(tg, j), list_get(tg, 0), tg, aux_trainer_list)){
-					is_in_deadlock = false;
-				}
-
-				t_list * another_aux_trainer_list = list_create();
-				if(!exists_path_to(list_get(tg, 0), list_get(tg, 0), list_get(tg, j), tg, another_aux_trainer_list)){
-					is_in_deadlock = false;
-				}
-			}
-
-			if(is_in_deadlock){
-				log_info(LOGGER, "Deadlock en grupo %d", i);
-
-				for(int j=0; j<tg->elements_count; j++){
-					trainer * ttrainer = list_get(tg, j);
-					log_info(LOGGER, "\t%d", ttrainer->id);
-				}
-			}
-		}
- */

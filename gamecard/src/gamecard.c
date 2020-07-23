@@ -107,7 +107,7 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 						if (has_broker_connection == true){
 							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 						}
-						log_info(LOGGER, "Pokemon caught failed");
+						log_info(LOGGER, "Pokemon catch failed");
 					} else {
 						line->quantity--;
 
@@ -155,7 +155,7 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 					}
 				} else {
-					log_info(LOGGER, "  No hubo posiciones");
+					log_info(LOGGER, "  No positions");
 				}
 			}
 	}
@@ -326,7 +326,7 @@ t_config * get_config_for_file(char * path, char * filename) {
 void * write_payload_in_file(char * path, char * filename, char * payload, int payload_size, int tid) {
 	int open_result = open_file(path, filename, tid);
 	if(open_result != 0) {
-		log_info(LOGGER, "No se pudo abrir, reintando en unos segundos");
+		log_info(LOGGER, "File could not be opened. Retrying in a few seconds...");
 		sleep(CONFIG.retry_time_op);
 		return write_payload_in_file(path, filename, payload, payload_size, tid);
 	}
@@ -419,14 +419,14 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 	config_set_value(config, "BLOCKS", blocks_for_config);
 	config_save(config);
 
-	log_info(LOGGER, "   TID %d escribio %d bytes en %s", tid, written_bytes, filename);
+	log_info(LOGGER, "Thread %d has written %d bytes in %s", tid, written_bytes, filename);
 	return NULL;
 }
 
 char * read_file_content(char * path, char * filename, int tid) {
 	int open_result = open_file(path, filename, tid);
 	if(open_result != 0) {
-		log_info(LOGGER, "No se pudo abrir, reintando en unos segundos");
+		log_info(LOGGER, "File could not be opened. Retrying in a few seconds...");
 		sleep(CONFIG.retry_time_op);
 		return read_file_content(path, filename, tid);
 	}
@@ -472,7 +472,7 @@ char * read_file_content(char * path, char * filename, int tid) {
 		readed_bytes += to_read_bytes;
 	}
 
-	log_info(LOGGER, "   TID %d leyó %d bytes en %s", tid, readed_bytes, filename);
+	log_info(LOGGER, "Thread %d has read %d bytes in %s", tid, readed_bytes, filename);
 	return content;
 }
 
