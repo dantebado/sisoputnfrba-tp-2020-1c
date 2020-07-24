@@ -78,7 +78,6 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 				queue_message * response = appeared_pokemon_create(npm->pokemon, npm->x, npm->y);
 				print_pokemon_message(response);
 				if(has_broker_connection == true) {
-					log_info(LOGGER, "Broker connection active");
 					log_info(LOGGER, "Sending answer");
 					send_pokemon_message(CONFIG.broker_socket, response, 1, -1);
 				} else {
@@ -102,7 +101,6 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 						queue_message * response = caught_pokemon_create(0);
 						print_pokemon_message(response);
 						if (has_broker_connection == true){
-							log_info(LOGGER, "  Broker connection active");
 							log_info(LOGGER, "  Sending failed answer");
 							response = send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 							log_info(LOGGER, "  Response was assigned MID %d", response->header->message_id, response->header->correlative_id);
@@ -120,7 +118,6 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 						queue_message * response = caught_pokemon_create(1);
 						print_pokemon_message(response);
 						if (has_broker_connection == true){
-							log_info(LOGGER, "  Broker connection active");
 							log_info(LOGGER, "  Sending caught answer");
 							send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 							log_info(LOGGER, "  Response was assigned MID %d", response->header->message_id, response->header->correlative_id);
@@ -151,12 +148,11 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 				print_pokemon_message(response);
 				if(listaPosiciones->elements_count > 0) {
 					if (has_broker_connection == true){
-						log_info(LOGGER, "Broker connection active");
 						log_info(LOGGER, "Sending answer");
 						send_pokemon_message(CONFIG.broker_socket, response, 1, message->header->message_id);
 					}
 				} else {
-					log_info(LOGGER, "  No positions");
+					log_info(LOGGER, "  No positions are available for this pokemon");
 				}
 				log_info(LOGGER, "  Answer sent to broker");
 			}
@@ -421,6 +417,8 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 	config_set_value(config, "BLOCKS", blocks_for_config);
 	config_save(config);
 
+	save_bitmap();
+
 	log_info(LOGGER, "Thread %d has written %d bytes in %s", tid, written_bytes, filename);
 	return NULL;
 }
@@ -510,7 +508,6 @@ int broker_server_function() {
 		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
 
 		pthread_mutex_lock(&broker_mutex);
-		log_info(LOGGER, "Internal need %d", internal_broker_need);
 		if(internal_broker_need == 0) {
 			pthread_mutex_lock(&op_mutex);
 			read(CONFIG.broker_socket, header, sizeof(net_message_header));
