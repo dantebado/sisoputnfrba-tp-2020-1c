@@ -130,12 +130,14 @@ typedef struct {
 } broker_config __attribute__((packed));
 
 typedef struct {
+	int id;
 	int socket;
 	char * ip;
 	int port;
 	int doing_internal_work;
 	int just_created;
 	t_list * queues;
+	int ready_to_recieve;
 	pthread_mutex_t access_mutex;
 	pthread_mutex_t ready_to_recieve_mutex;
 	pthread_mutex_t access_answering;

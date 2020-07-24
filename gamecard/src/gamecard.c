@@ -84,7 +84,6 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 				} else {
 					log_error(LOGGER, "Cannot notify broker");
 				}
-
 				log_info(LOGGER, "  Saved new pokemon location");
 			}
 			break;
@@ -159,6 +158,7 @@ void * process_pokemon_message(gamecard_thread_payload * payload) {
 				} else {
 					log_info(LOGGER, "  No positions");
 				}
+				log_info(LOGGER, "  Answer sent to broker");
 			}
 	}
 

@@ -184,6 +184,10 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 										}
 									} else { }
 
+									free(ttrainer->stats->current_activity);
+									ttrainer->stats->current_activity = NULL;
+									ttrainer->stats->status = NEW_ACTION;
+
 									//Si ya estan todos los pokemones que el team necesita
 									if(requirements_are_finished()){
 										log_info(LOGGER, "Deadlock detection algorithm started!");
@@ -194,10 +198,6 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 								} else {
 									log_info(LOGGER, "Trainer %d could not capture his objective!", ttrainer->id);
 								}
-
-								free(ttrainer->stats->current_activity);
-								ttrainer->stats->current_activity = NULL;
-								ttrainer->stats->status = NEW_ACTION;
 							}
 						}
 					}
@@ -736,6 +736,7 @@ void executing(trainer * t){
 		pthread_mutex_lock(&t->stats->mutex);
 
 		log_info(LOGGER, "Trainer %d is executing! He is the first in ready queue", t->id);
+		log_info(LOGGER, "  Activity address for %d is %d", t->id, t->stats->current_activity);
 
 		int quantum_ended = false;
 
@@ -910,6 +911,7 @@ void executing(trainer * t){
 						executing_trainer = NULL;
 						t->stats->current_activity = NULL;
 						trading_trainer->stats->current_activity = NULL;
+
 						trading_counter = 0;
 
 						for(i=0 ; i<ready_queue->elements_count ; i++) {
@@ -971,6 +973,7 @@ trainer * find_free_trainer() {
 void compute_pending_actions() {
 	pthread_mutex_lock(&required_pokemons_mutex);
 	int no_available_trainers = 0;
+	log_info(LOGGER, "Planning catch for %d pokemons", required_pokemons->elements_count);
 	while(required_pokemons->elements_count > 0 && no_available_trainers == 0) {
 		appeared_pokemon_message * apm = list_get(required_pokemons, 0);
 		trainer * free_trainer = closest_free_trainer(apm->x, apm->y);
@@ -984,10 +987,11 @@ void compute_pending_actions() {
 			free_trainer->stats->status = READY_ACTION;
 			list_add(ready_queue, free_trainer);
 
-			log_info(LOGGER, "Trainer %d is ready! He is the closest to catch", free_trainer->id);
+			log_info(LOGGER, "Trainer %d is ready! He is the closest to catch %s", free_trainer->id, apm->pokemon);
 			list_remove(required_pokemons, 0);
 		} else {
 			no_available_trainers = 1;
+			log_info(LOGGER, "  No available trainers to catch %s", apm->pokemon);
 		}
 	}
 	pthread_mutex_unlock(&required_pokemons_mutex);
@@ -1142,10 +1146,11 @@ int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * tg, t
 //Funcion PADRE de los deadlocks
 void detect_circular_chains(){
 	int flag_detected_deadlocks = 0;
+
+	log_info(LOGGER, "All required pokemons for this team are catched detecting deadlocks");
 	for(int i=0; i<deadlock_groups->elements_count; i++){
 		t_list * tg = list_get(deadlock_groups, i);
-
-		if(detect_deadlock_from(list_get(tg, 0), tg)){
+		if(detect_deadlock_from(list_get(tg, 0), tg) && flag_detected_deadlocks == 0){
 			int is_in_deadlock = true;
 			for(int j=1; j<tg->elements_count; j++){
 				t_list * aux_trainer_list = list_create();
@@ -1160,16 +1165,16 @@ void detect_circular_chains(){
 			}
 
 			if(is_in_deadlock){
+				flag_detected_deadlocks = 1;
 				statistics->solved_deadlocks++;
 				log_info(LOGGER, "A deadlock has been found!");
-				flag_detected_deadlocks = 1;
 				solve_deadlock_for(tg, list_get(tg, 0));
 			}
 		}
 	}
-	if(flag_detected_deadlocks != 0){
+
+	if(flag_detected_deadlocks == 0){
 		log_info(LOGGER, "No deadlocks have been found in this detection round!");
-		//TODO detectar tradings que no involucran deadlock
 	}
 }
 
@@ -1217,7 +1222,7 @@ void solve_deadlock_for(t_list * tg, trainer * root){
 						ttrainer->stats->status = READY_ACTION;
 						list_add(ready_queue, ttrainer);
 
-						log_info(LOGGER, "   Trainer %d is ready! He is about to solve a deadlock", ttrainer->id);
+						log_info(LOGGER, "   Trainer %d is ready! He is about to solve a deadlock (%d @ %d)", ttrainer->id, ttrainer->stats->current_activity->type, ttrainer->stats->current_activity);
 					}
 				}
 			}
