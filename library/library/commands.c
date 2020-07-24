@@ -114,7 +114,6 @@ void _command_subscribe_to_queue(_message_queue_name queue, int seconds, gameboy
 		sleep(seconds);
 		reading = 0;
 
-		unsubscribe_from_queue(broker_socket, queue);
 		close_socket(broker_socket);
 		printf("Finalizada la Escucha\n");
 
