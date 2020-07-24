@@ -26,6 +26,7 @@ pthread_mutex_t internal_need_mutex = PTHREAD_MUTEX_INITIALIZER;
 int internal_broker_need;
 
 pthread_mutex_t rtr_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t all_gets_ready = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t gets_left_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_t * exec_thread;
@@ -243,6 +244,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 
 	set_internal_need(0);
 	pthread_mutex_unlock(&broker_mutex);
+	pthread_mutex_unlock(&all_gets_ready);
 
 	return 1;
 }
@@ -327,6 +329,7 @@ int get_gets_left() {
 
 void * send_initial_get(char * pokemon_name) {
 	pthread_mutex_lock(&broker_mutex);
+	log_info(LOGGER, "     Broker mutex taken by initial get");
 
 	queue_message * msg = get_pokemon_create(pokemon_name);
 
@@ -343,6 +346,7 @@ void * send_initial_get(char * pokemon_name) {
 	if(get_gets_left() == 0) {
 		send_rtr();
 		set_internal_need(0);
+		pthread_mutex_unlock(&all_gets_ready);
 	}
 
 	pthread_mutex_unlock(&broker_mutex);
@@ -389,22 +393,26 @@ int broker_server_function() {
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CAUGHT_POKEMON);
 
 	set_internal_need(1);
+	pthread_mutex_lock(&all_gets_ready);
 
 	pthread_t thread_gets;
 	pthread_create(&thread_gets, NULL, send_gets, NULL);
 
 	while(1) {
-		void * buffer = malloc(1);
+		void * buffer = malloc(sizeof(net_message_header));
 		net_message_header * header = malloc(sizeof(net_message_header));
 
+		pthread_mutex_lock(&all_gets_ready);
+		pthread_mutex_unlock(&all_gets_ready);
+		log_info(LOGGER, " Broker mutex taken by broker thread");
+
 		log_info(LOGGER, "Awaiting data from Broker");
-		recv(CONFIG.broker_socket, buffer, 1, MSG_PEEK);
+		int checkrecv = recv(CONFIG.broker_socket, buffer, 1, MSG_PEEK);
 		free(buffer);
-
 		pthread_mutex_lock(&broker_mutex);
-
-		log_info(LOGGER, "  Hay data en el buffer de Broker %d", get_internal_need());
-		if(get_internal_need() == 0 && gets_left == 0) {
+		int in = get_internal_need();
+		log_info(LOGGER, "  Hay data en el buffer de Broker ID = %d & REC = %d", in, checkrecv);
+		if(in == 0 && get_gets_left() == 0) {
 			recv(CONFIG.broker_socket, header, sizeof(net_message_header), 0);
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
 			send_message_acknowledge(message, CONFIG.broker_socket);
@@ -855,8 +863,9 @@ void executing(trainer * t){
 						}
 
 						if(has_broker_connection == true) {
+							log_info(LOGGER, "  Locking Broker Mutex");
 							pthread_mutex_lock(&broker_mutex);
-							log_info(LOGGER, "Broker mutex was available");
+							log_info(LOGGER, "     Broker mutex taken by capture activity");
 
 								send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
 								t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;

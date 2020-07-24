@@ -690,11 +690,8 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 
 	log_info(LOGGER, "Sending %d, to FD %d", message->message->header->message_id, subscriber->socket);
 	pthread_mutex_lock(&(subscriber->ready_to_recieve_mutex));
-	log_info(LOGGER, "  RTR");
 	pthread_mutex_lock(&(subscriber->access_answering));
-	log_info(LOGGER, "   AA");
 	pthread_mutex_lock(&(subscriber->access_mutex));
-	log_info(LOGGER, "    AM");
 
 	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
 		log_info(LOGGER, "    Flag %d available to send %d", subscriber->socket, message->message->header->message_id);
@@ -745,12 +742,17 @@ void broadcast_message(broker_message * message) {
 	}
 }
 void update_subscriber_with_messages_for_queue(message_queue * queue, client * subscriber) {
+	log_info(LOGGER, "Updating FD %d with all messages from %s", subscriber->socket, enum_to_queue_name(queue->name));
+	if(queue->messages->elements_count == 0) {
+		log_info(LOGGER, " Queue %s has no messages", enum_to_queue_name(queue->name));
+	}
 	for(int i=0 ; i<queue->messages->elements_count ; i++) {
 		broker_message * message = list_get(queue->messages, i);
 		send_message_to_client(message, subscriber);
 	}
 }
 void update_subscriber_with_messages_all_queues(client * subscriber) {
+	log_info(LOGGER, "Updating FD %d With All Subscribes Queues", subscriber->socket);
 	for(int l=0 ; l<subscriber->queues->elements_count ; l++) {
 		message_queue * queue = list_get(subscriber->queues, l);
 		update_subscriber_with_messages_for_queue(queue, subscriber);
