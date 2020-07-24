@@ -79,6 +79,8 @@ int destroy_unserialized(void * payload, pokemon_message_type type);
 client * add_or_get_client(int socket, char * ip, int port);
 client * remove_client(int socket, char * ip, int port);
 
+t_log * LOGGER_DUMP;
+
 //SIGNAL
 void my_handler(int signum);
 
@@ -103,6 +105,7 @@ void setup(int argc, char **argv) {
 	_CONFIG = config_create(cfg_path);
 
 	LOGGER = log_create(config_get_string_value(_CONFIG, "LOG_FILE"), (argc > 1) ? argv[1] : "broker", true, LOG_LEVEL_INFO);
+	LOGGER_DUMP = log_create(config_get_string_value(_CONFIG, "DUMP_LOG_FILE"), (argc > 1) ? argv[1] : "broker", true, LOG_LEVEL_INFO);
 
 	CONFIG.memory_size = config_get_int_value(_CONFIG, "TAMANO_MEMORIA");
 	CONFIG.partition_min_size = config_get_int_value(_CONFIG, "TAMANO_MINIMO_PARTICION");
@@ -151,8 +154,6 @@ void setup(int argc, char **argv) {
 
 	pthread_create(&CONFIG.server_thread, NULL, server_function, CONFIG.internal_socket);
 	pthread_join(CONFIG.server_thread, NULL);
-
-	//print_partitions_info();
 }
 
 /*
@@ -407,19 +408,20 @@ memory_partition * partition_create(int number, int size, void * start, broker_m
 }
 void print_partitions_info() {
 	int i;
-	log_info(LOGGER, "-------------------------------------------------------");
-	log_info(LOGGER, "::DUMP::");
+	log_info(LOGGER, "Dump Requested");
+	log_info(LOGGER_DUMP, "-------------------------------------------------------");
+	log_info(LOGGER_DUMP, "::DUMP::");
 	for(i=0 ; i<partitions->elements_count ; i++) {
 		memory_partition * partition = list_get(partitions, i);
 		print_partition_info(i, partition);
 	}
-	log_info(LOGGER, "-------------------------------------------------------");
+	log_info(LOGGER_DUMP, "-------------------------------------------------------");
 }
 void print_partition_info(int n, memory_partition * partition) {
-	log_info(LOGGER, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>\tET<%d>\tCOLA:<%s>\tID:<%d>",
-			partition->number, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
-			partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time, partition->entry_time,
-			partition->tipo_cola, partition->id_message);
+	log_info(LOGGER_DUMP, "Partition %d - \tFrom %d\tTo %d\t[%c]\tSize:%db\tLRU<%d>\tET<%d>\tCOLA:<%s>\tID:<%d>",
+				partition->number, partition->partition_start - main_memory, partition->partition_start + partition->partition_size - main_memory,
+				partition->is_free ? 'F' : 'X', partition->partition_size, partition->access_time, partition->entry_time,
+				partition->tipo_cola, partition->id_message);
 }
 void free_memory_partition(memory_partition * partition) {
 	int i, j;
@@ -517,7 +519,7 @@ void compact_memory(int already_reserved_mutex) {
 				if(free_s > 0) {
 					list_add(partitions, partition_create(partitions->elements_count, free_s, last_ptr, NULL));
 				}
-				log_info(LOGGER, "COMPACTING");
+				log_info(LOGGER, "COMPACTING DONE");
 			}
 			break;
 		case BUDDY_SYSTEM:;
@@ -535,7 +537,7 @@ void compact_memory(int already_reserved_mutex) {
 							int addr_1 = p1->partition_start - main_memory;
 							int buddy_check = addr_1  ^ p2->partition_size;
 							if(buddy_check == (p2->partition_start - main_memory)) {
-								log_info(LOGGER, "ASOCIATE PARTITIONS %d (%d) AND %d (%d)",
+								log_info(LOGGER, "ASOCIATE BS PARTITIONS %d (%d) AND %d (%d)",
 										p1->number, p1->partition_start - main_memory,
 										p2->number, p2->partition_start - main_memory);
 								p1->partition_size *= 2;
@@ -550,7 +552,7 @@ void compact_memory(int already_reserved_mutex) {
 						}
 					}
 				} while(was_change);
-				log_info(LOGGER, "BD ASSOCIATION");
+				log_info(LOGGER, "BD ASSOCIATION DONE");
 			}
 			break;
 	}
@@ -676,7 +678,6 @@ broker_message * add_message_to_queue(queue_message * message, _message_queue_na
 	pthread_mutex_lock(&(queue->access_mutex));
 	list_add(queue->messages, final_message);
 	list_add(messages_index, final_message);
-	log_info(LOGGER, "MID %d added to indexes", final_message->message->header->message_id);
 	pthread_mutex_unlock(&(queue->access_mutex));
 	pthread_mutex_unlock(&messages_index_mutex);
 	return final_message;
@@ -694,11 +695,10 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 	pthread_mutex_lock(&(subscriber->access_mutex));
 
 	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
-		log_info(LOGGER, "    Flag %d available to send %d", subscriber->socket, message->message->header->message_id);
-			send_pokemon_message_with_id(subscriber->socket, message->message, 0,
-					message->message->header->message_id,
-					message->message->header->correlative_id);
-		log_info(LOGGER, "    MID %d, sent to FD %d", message->message->header->message_id, subscriber->socket);
+		send_pokemon_message_with_id(subscriber->socket, message->message, 0,
+				message->message->header->message_id,
+				message->message->header->correlative_id);
+		log_info(LOGGER, "MID %d, sent to FD %d", message->message->header->message_id, subscriber->socket);
 		list_add(message->already_sent, subscriber);
 
 		access_partition(partition);
@@ -707,7 +707,6 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 		message->message->is_serialized = true;
 		message->message->payload = partition;
 
-		log_info(LOGGER, "    MID %d ready for more operations", message->message->header->message_id);
 		pthread_mutex_unlock(&(subscriber->access_mutex));
 		pthread_mutex_unlock(&(subscriber->ready_to_recieve_mutex));
 		return 1;
@@ -716,11 +715,10 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 		message->message->is_serialized = true;
 		message->message->payload = partition;
 		if(message_was_sent_to_susbcriber(message, subscriber)) {
-			log_info(LOGGER, "    MID %d was already sent to FD %d", message->message->header->message_id, subscriber->socket);
+			log_info(LOGGER, "MID %d was already sent to FD %d", message->message->header->message_id, subscriber->socket);
 		} else {
-			log_info(LOGGER, "    MID %d was not sent to FD %d due to recieving availability", message->message->header->message_id, subscriber->socket);
+			log_info(LOGGER, "MID %d was not sent to FD %d due to recieving availability", message->message->header->message_id, subscriber->socket);
 		}
-		log_info(LOGGER, "    MID %d ready for more operations", message->message->header->message_id);
 		pthread_mutex_unlock(&(subscriber->access_mutex));
 		pthread_mutex_unlock(&(subscriber->access_answering));
 		pthread_mutex_unlock(&(subscriber->ready_to_recieve_mutex));
@@ -729,7 +727,7 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 	return 0;
 }
 void broadcast_message(broker_message * message) {
-	log_info(LOGGER, "Broadcasting %d", message->message->header->message_id);
+	log_info(LOGGER, "Broadcasting MID %d", message->message->header->message_id);
 	message_queue * queue = find_queue_by_name(message->message->header->queue);
 	if(queue->subscribers->elements_count == 0) {
 		log_info(LOGGER, "  Queue (%d) has no subscribers. Skipping.", queue);
@@ -742,9 +740,9 @@ void broadcast_message(broker_message * message) {
 	}
 }
 void update_subscriber_with_messages_for_queue(message_queue * queue, client * subscriber) {
-	log_info(LOGGER, "Updating FD %d with all messages from %s", subscriber->socket, enum_to_queue_name(queue->name));
+	log_info(LOGGER, "Updating FD %d with all messages from queue %s", subscriber->socket, enum_to_queue_name(queue->name));
 	if(queue->messages->elements_count == 0) {
-		log_info(LOGGER, " Queue %s has no messages", enum_to_queue_name(queue->name));
+		log_info(LOGGER, "  Queue %s has no messages. Skipping.", enum_to_queue_name(queue->name));
 	}
 	for(int i=0 ; i<queue->messages->elements_count ; i++) {
 		broker_message * message = list_get(queue->messages, i);
@@ -772,7 +770,7 @@ int subscribe_to_broker_queue(client * subscriber, _message_queue_name queue_nam
 		list_add(queue->subscribers, subscriber);
 		list_add(subscriber->queues, queue);
 
-		log_info(LOGGER, "FD %d SUBSCRIBED TO QUEUE %s (%d)", subscriber->socket, enum_to_queue_name(queue_name), queue);
+		log_info(LOGGER, "FD %d SUBSCRIBED TO QUEUE %s", subscriber->socket, enum_to_queue_name(queue_name));
 		send_int(subscriber->socket, OPT_OK);
 		return OPT_OK;
 	} else {
@@ -780,6 +778,38 @@ int subscribe_to_broker_queue(client * subscriber, _message_queue_name queue_nam
 		send_int(subscriber->socket, OPT_FAILED);
 		return OPT_FAILED;
 	}
+}
+int unsubscribe_from_broker_queue(client * subscriber, _message_queue_name queue_name) {
+	message_queue * queue = find_queue_by_name(queue_name);
+
+	if(queue != NULL) {
+
+		for(int i=0 ; i<queue->subscribers ; i++) {
+			client * ts = list_get(queue->subscribers, i);
+			if(ts->socket == subscriber->socket) {
+				list_remove(queue->subscribers, i);
+			}
+		}
+		for(int i=0 ; i<subscriber->queues ; i++) {
+			message_queue * tq = list_get(subscriber->queues, i);
+			if(tq->name == queue->name) {
+				list_remove(subscriber->queues, i);
+			}
+		}
+
+		return OPT_OK;
+	} else {
+		return OPT_FAILED;
+	}
+}
+int unsubscribe_from_all_queues(client * subscriber) {
+	for(int i=0 ; i<subscriber->queues ; i++) {
+		message_queue * queue = list_get(subscriber->queues, i);
+		if(unsubscribe_from_broker_queue(subscriber, queue->name) == OPT_OK){
+			i--;
+		}
+	}
+	log_info(LOGGER, "FD %d unsubscribed from all queues");
 }
 
 /*
@@ -1041,7 +1071,7 @@ void * handle_incoming(client * tsub, net_message_header * header) {
 			break;
 		case PROCESSED:;
 			{
-				log_info(LOGGER, "  %d completed previous message processing", tsub->socket);
+				log_info(LOGGER, "%d completed previous message processing", tsub->socket);
 				pthread_mutex_unlock(&(tsub->access_answering));
 			}
 			break;
@@ -1064,7 +1094,7 @@ void * handle_incoming(client * tsub, net_message_header * header) {
 				queue_message * message = receive_pokemon_message(tsub->socket);
 
 				if(message->header->message_id != message_id) {
-					log_info(LOGGER, "  Message had pre assigned MID %d", message->header->message_id);
+					log_info(LOGGER, "Message had pre assigned MID %d", message->header->message_id);
 				}
 
 				print_pokemon_message(message);
@@ -1128,6 +1158,7 @@ void * descriptor_socket(int * _fd_) {
 		}
 	}
 	log_info(LOGGER, "Lost connection socket %d", fd);
+	unsubscribe_from_all_queues(tsub);
 
 	return NULL;
 }
