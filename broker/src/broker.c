@@ -60,9 +60,7 @@ message_queue * find_queue_by_name(_message_queue_name);
 broker_message * add_message_to_queue(queue_message * message, _message_queue_name queue_name);
 
 //SUBSCRIPTIONS
-int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name);
-int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name);
-void unsubscribe_socket_from_all_queues(int fd, char * ip, int port);
+int subscribe_to_broker_queue(client * subscriber, _message_queue_name queue_name);
 
 //SERIALIZATION
 _aux_serialization * serialize_message_payload(queue_message * message);
@@ -73,12 +71,11 @@ int server_function(int socket);
 
 //MESSAGES
 int generate_message_id();
-int acknowledge_message(int socket, char * ip, int port, int message_id);
+int acknowledge_message(client * subscriber, int message_id);
 int message_was_sent_to_susbcriber(broker_message * tmessage, client * subscriber);
 int destroy_unserialized(void * payload, pokemon_message_type type);
 
 //CLIENTS
-int is_same_client(client * c1, client * c2);
 client * add_or_get_client(int socket, char * ip, int port);
 client * remove_client(int socket, char * ip, int port);
 
@@ -473,7 +470,7 @@ void free_memory_partition(memory_partition * partition) {
 		}
 	}
 	pthread_mutex_unlock(&memory_access_mutex);
-	log_info(LOGGER, "REMOVED PARTITION %d (%d)", partition->number, partition->partition_start - main_memory);
+	log_info(LOGGER, "REMOVED PARTITION %d (%d) (MID %d)", partition->number, partition->partition_start - main_memory, partition->id_message);
 }
 memory_partition * write_payload_to_memory(int payload_size, void * payload) {
 	memory_partition * the_partition = get_available_partition_by_payload_size(payload_size);
@@ -691,15 +688,20 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 	message->message->is_serialized = false;
 	message->message->payload = deserialized_message;
 
+	log_info(LOGGER, "Sending %d, to FD %d", message->message->header->message_id, subscriber->socket);
+	pthread_mutex_lock(&(subscriber->ready_to_recieve_mutex));
+	log_info(LOGGER, "  RTR");
+	pthread_mutex_lock(&(subscriber->access_answering));
+	log_info(LOGGER, "   AA");
+	pthread_mutex_lock(&(subscriber->access_mutex));
+	log_info(LOGGER, "    AM");
+
 	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
-		log_info(LOGGER, "SENDING MID %d, TO FD %d", message->message->header->message_id, subscriber->socket);
-		log_info(LOGGER, "  Waiting Answering flag from %d", subscriber->socket);
-		pthread_mutex_lock(&(subscriber->access_answering));
-		log_info(LOGGER, "    Flag %d OK", subscriber->socket);
+		log_info(LOGGER, "    Flag %d available to send %d", subscriber->socket, message->message->header->message_id);
 			send_pokemon_message_with_id(subscriber->socket, message->message, 0,
 					message->message->header->message_id,
 					message->message->header->correlative_id);
-		log_info(LOGGER, "  SENT MID %d, TO FD %d", message->message->header->message_id, subscriber->socket);
+		log_info(LOGGER, "    MID %d, sent to FD %d", message->message->header->message_id, subscriber->socket);
 		list_add(message->already_sent, subscriber);
 
 		access_partition(partition);
@@ -707,20 +709,38 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 		destroy_unserialized(deserialized_message, message->message->header->type);
 		message->message->is_serialized = true;
 		message->message->payload = partition;
-		return 1;
-	}
 
-	destroy_unserialized(deserialized_message, message->message->header->type);
-	message->message->is_serialized = true;
-	message->message->payload = partition;
+		log_info(LOGGER, "    MID %d ready for more operations", message->message->header->message_id);
+		pthread_mutex_unlock(&(subscriber->access_mutex));
+		pthread_mutex_unlock(&(subscriber->ready_to_recieve_mutex));
+		return 1;
+	} else {
+		destroy_unserialized(deserialized_message, message->message->header->type);
+		message->message->is_serialized = true;
+		message->message->payload = partition;
+		if(message_was_sent_to_susbcriber(message, subscriber)) {
+			log_info(LOGGER, "    MID %d was already sent to FD %d", message->message->header->message_id, subscriber->socket);
+		} else {
+			log_info(LOGGER, "    MID %d was not sent to FD %d due to recieving availability", message->message->header->message_id, subscriber->socket);
+		}
+		log_info(LOGGER, "    MID %d ready for more operations", message->message->header->message_id);
+		pthread_mutex_unlock(&(subscriber->access_mutex));
+		pthread_mutex_unlock(&(subscriber->access_answering));
+		pthread_mutex_unlock(&(subscriber->ready_to_recieve_mutex));
+		return 0;
+	}
 	return 0;
 }
 void broadcast_message(broker_message * message) {
 	log_info(LOGGER, "Broadcasting %d", message->message->header->message_id);
 	message_queue * queue = find_queue_by_name(message->message->header->queue);
-	log_info(LOGGER, "  Queue has %d subs", queue->subscribers->elements_count);
+	if(queue->subscribers->elements_count == 0) {
+		log_info(LOGGER, "  Queue (%d) has no subscribers. Skipping.", queue);
+		return;
+	}
 	for(int i=0 ; i<queue->subscribers->elements_count ; i++) {
 		client * subscriber = list_get(queue->subscribers, i);
+		log_info(LOGGER, "  Send MID %d to %d", message->message->header->message_id, subscriber->socket);
 		send_message_to_client(message, subscriber);
 	}
 }
@@ -743,70 +763,20 @@ void update_subscriber_with_messages_all_queues(client * subscriber) {
  *
  * */
 
-int subscribe_to_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name) {
-	client * sub = add_or_get_client(socket, ip, port);
-
+int subscribe_to_broker_queue(client * subscriber, _message_queue_name queue_name) {
 	message_queue * queue = find_queue_by_name(queue_name);
+
 	if(queue != NULL) {
-		list_add(queue->subscribers, sub);
+		list_add(queue->subscribers, subscriber);
+		list_add(subscriber->queues, queue);
 
-		int pres = 0;
-		for(int o=0 ; o<sub->queues->elements_count ; o++) {
-			message_queue * q = list_get(sub->queues, o);
-			if(q->name == queue->name) {
-				pres = 1;
-			}
-		}
-		if(pres == 0) {
-			list_add(sub->queues, queue);
-		}
-
-		log_info(LOGGER, "FD %d SUBSCRIBED TO QUEUE %s", socket, enum_to_queue_name(queue_name));
-		send_int(socket, OPT_OK);
+		log_info(LOGGER, "FD %d SUBSCRIBED TO QUEUE %s (%d)", subscriber->socket, enum_to_queue_name(queue_name), queue);
+		send_int(subscriber->socket, OPT_OK);
 		return OPT_OK;
 	} else {
-		log_info(LOGGER, "FD %d FAILED SUBSCRIBING TO QUEUE %s", socket, enum_to_queue_name(queue_name));
-		send_int(socket, OPT_FAILED);
+		log_info(LOGGER, "FD %d FAILED SUBSCRIBING TO QUEUE %s", subscriber->socket, enum_to_queue_name(queue_name));
+		send_int(subscriber->socket, OPT_FAILED);
 		return OPT_FAILED;
-	}
-}
-int unsubscribe_from_broker_queue(int socket, char * ip, int port, _message_queue_name queue_name) {
-	message_queue * queue = find_queue_by_name(queue_name);
-	client * tc = add_or_get_client(socket, ip, port);
-
-	if(queue != NULL) {
-		int i, r = 0;
-		for(i=0 ; i<queue->subscribers->elements_count ; i++) {
-			client * s = list_get(queue->subscribers, i);
-			if(is_same_client(s, tc)) {
-				r = 1;
-				list_remove(queue->subscribers, i);
-			}
-		}
-		if(r == 0) {
-			send_int(socket, OPT_FAILED);
-			return OPT_FAILED;
-		} else {
-			send_int(socket, OPT_OK);
-			return OPT_OK;
-		}
-	} else {
-		send_int(socket, OPT_FAILED);
-		return OPT_FAILED;
-	}
-}
-void unsubscribe_socket_from_all_queues(int fd, char * ip, int port) {
-	client * tclient = add_or_get_client(fd, ip, port);
-	int i, j;
-	for(i=0 ; i<queues->elements_count ; i++) {
-		message_queue * queue = list_get(queues, i);
-		for(j=0 ; j<queue->subscribers->elements_count ; j++) {
-			client * sub = list_get(queue->subscribers, j);
-			if(is_same_client(sub, tclient)) {
-				list_remove(queue->subscribers, j);
-				j = queue->subscribers->elements_count + 1;
-			}
-		}
 	}
 }
 
@@ -1050,20 +1020,8 @@ void * deserialize_message_payload(void * payload, pokemon_message_type type) {
 	return return_pointer;
 }
 
-typedef struct {
-	int fd;
-	char * ip;
-	int port;
-	net_message_header * header;
-} handle_incoming_struct;
-void * handle_incoming_as_thread(handle_incoming_struct * data) {
-	int fd = data->fd;
-	char * ip = data->ip;
-	int port = data->port;
-	net_message_header * header = data->header;
-
-	int time_req = get_time_counter();
-	client * tsub = add_or_get_client(fd, ip, port);
+void * handle_incoming(client * tsub, net_message_header * header) {
+	pthread_mutex_unlock(&tsub->access_mutex);
 
 	int post_uswmal = 0;
 	broker_message * broker_answer = NULL;
@@ -1071,38 +1029,40 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 	switch(header->type) {
 		case READY_TO_RECIEVE:;
 			{
+				pthread_mutex_lock(&(tsub->ready_to_recieve_mutex));
+				send_int(tsub->socket, 1);
 				tsub->ready_to_recieve = 1;
-				log_info(LOGGER, "FD %d Ready To Recieve Data", fd);
+				log_info(LOGGER, "FD %d is now ready to recieve data", tsub->socket);
+				pthread_mutex_unlock(&(tsub->ready_to_recieve_mutex));
 				post_uswmal = 1;
 			}
 			break;
 		case PROCESSED:;
 			{
-				log_info(LOGGER, "  %d Answered Completition", tsub->socket);
+				log_info(LOGGER, "  %d completed previous message processing", tsub->socket);
 				pthread_mutex_unlock(&(tsub->access_answering));
 			}
 			break;
 		case NEW_SUBSCRIPTION:;
 			{
-				_message_queue_name queue_name = recv_int(fd);
-				subscribe_to_broker_queue(fd, ip, port, queue_name);
+				_message_queue_name queue_name = recv_int(tsub->socket);
+				subscribe_to_broker_queue(tsub, queue_name);
 			}
 			break;
 		case DOWN_SUBSCRIPTION:;
 			{
-				_message_queue_name queue_name = recv_int(fd);
-				unsubscribe_from_broker_queue(fd, ip, port, queue_name);
+				_message_queue_name queue_name = recv_int(tsub->socket);
 			}
 			break;
 		case NEW_MESSAGE:;
 			{
 				int message_id = generate_message_id();
 
-				send_int(fd, message_id);
-				queue_message * message = receive_pokemon_message(fd);
+				send_int(tsub->socket, message_id);
+				queue_message * message = receive_pokemon_message(tsub->socket);
 
 				if(message->header->message_id != message_id) {
-					log_info(LOGGER, "  Pre assigned MID %d", message->header->message_id);
+					log_info(LOGGER, "  Message had pre assigned MID %d", message->header->message_id);
 				}
 
 				print_pokemon_message(message);
@@ -1110,21 +1070,62 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 			}
 			break;
 		case MESSAGE_ACK:;
-			int message_id = recv_int(fd);
-			acknowledge_message(fd, ip, port, message_id);
+			int message_id = recv_int(tsub->socket);
+			acknowledge_message(tsub, message_id);
+			break;
+		default:
 			break;
 	}
 
 	tsub->doing_internal_work = 0;
 	pthread_mutex_unlock(&tsub->access_mutex);
-	log_info(LOGGER, "Mutex de cliente desbloqueado");
+
+	pthread_t uswmal_t;
+	pthread_t broadcast_t;
 
 	if(post_uswmal == 1) {
-		update_subscriber_with_messages_all_queues(tsub);
+		pthread_create(&uswmal_t, NULL, update_subscriber_with_messages_all_queues, tsub);
 	}
 	if(broker_answer != NULL) {
-		broadcast_message(broker_answer);
+		pthread_create(&broadcast_t, NULL, broadcast_message, broker_answer);
 	}
+
+	return NULL;
+}
+
+void * descriptor_socket(int * _fd_) {
+	int fd = * _fd_, addrlen, recvcheck, has_connection = true;
+	struct sockaddr_in address;
+	getpeername(fd , (struct sockaddr*)&address , (socklen_t*)&addrlen);
+	char str[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &(address.sin_addr), str, INET_ADDRSTRLEN);
+
+	client * tsub = add_or_get_client(fd, str, address.sin_port);
+
+	log_info(LOGGER, "Init Thread for FD %d (%s) (%d) (#%d)", fd, str, tsub->port, tsub->id);
+
+	void * buffer = malloc(256);
+
+	while(has_connection == true) {
+		recvcheck = recv(fd, buffer, 1, MSG_PEEK);
+
+		if(recvcheck > 0) {
+			if(tsub->doing_internal_work == 0) {
+				pthread_mutex_lock(&tsub->access_mutex);
+				tsub->doing_internal_work = 1;
+
+				net_message_header * header = malloc(sizeof(net_message_header));
+				recv(fd, header, sizeof(net_message_header), 0);
+
+				handle_incoming(tsub, header);
+			} else {
+				//Doing internal work
+			}
+		} else {
+			has_connection = false;
+		}
+	}
+	log_info(LOGGER, "Lost connection socket %d", fd);
 
 	return NULL;
 }
@@ -1138,12 +1139,10 @@ void * handle_incoming_as_thread(handle_incoming_struct * data) {
 int server_function(int socket) {
 	int MAX_CONN = 50;
 
-	int addrlen, new_socket ,client_socket_array[MAX_CONN], activity, i, bytesread, sd;
+	int addrlen, new_socket ,client_socket_array[MAX_CONN], activity, i, sd;
 	int max_sd;
 	struct sockaddr_in address;
 	fd_set readfds;
-
-	net_message_header * incoming;
 
 	for (i = 0; i < MAX_CONN; i++) {
 		client_socket_array[i] = 0;
@@ -1155,6 +1154,8 @@ int server_function(int socket) {
 	}
 
 	addrlen = sizeof(address);
+
+	log_info(LOGGER, "Awaiting new broker client");
 
 	while(1) {
 		FD_ZERO(&readfds);
@@ -1184,11 +1185,6 @@ int server_function(int socket) {
 					char str[INET_ADDRSTRLEN];
 					inet_ntop(AF_INET, &(address.sin_addr), str, INET_ADDRSTRLEN);
 
-					{
-						//NEW CONNECTION
-						//new_connection(new_socket, string_duplicate(str), address.sin_port);
-					}
-
 					int registered = 0;
 					for (i = 0; i < MAX_CONN; i++) {
 						if (client_socket_array[i] == 0) {
@@ -1198,58 +1194,23 @@ int server_function(int socket) {
 							break;
 						}
 					}
+
+					{
+						//NEW CONNECTION
+						//new_connection(new_socket, string_duplicate(str), address.sin_port);
+
+						int * _fd_ = malloc(sizeof(int));
+						memcpy(_fd_, &new_socket, sizeof(int));
+
+						pthread_t thread_socket;
+						pthread_create(&thread_socket, NULL, descriptor_socket, _fd_);
+					}
+
 					if(registered == 0) {
 						log_error(LOGGER, "Cannot register client because of MAX_CONN limit");
 					}
-				}
-			}
-			for (i = 0; i < MAX_CONN; i++) {
-				sd = client_socket_array[i];
-				if (FD_ISSET(sd, &readfds)) {
-					int client_socket = sd;
-					incoming = malloc(sizeof(net_message_header));
 
-					getpeername(sd , (struct sockaddr*)&address , (socklen_t*)&addrlen);
-					char str[INET_ADDRSTRLEN];
-					inet_ntop(AF_INET, &(address.sin_addr), str, INET_ADDRSTRLEN);
-
-					client * tsub = add_or_get_client(client_socket, str, address.sin_port);
-					int checkrecv = recv(client_socket, incoming, sizeof(net_message_header), MSG_PEEK);
-
-					if(checkrecv > 0) {
-						pthread_mutex_lock(&tsub->access_mutex);
-						if(tsub->doing_internal_work == 0) {
-							tsub->doing_internal_work = 1;
-
-							if ((bytesread = recv(client_socket, incoming, sizeof(net_message_header), 0)) <= 1) {
-								{
-									//LOST CONNECTION
-									//lost_connection(client_socket, string_duplicate(str), address.sin_port);
-									log_info(LOGGER, "Lost connection of %d", sd);
-									remove_client(sd, str, address.sin_port);
-								}
-								close(sd);
-								client_socket_array[i] = 0;
-								log_trace(LOGGER, "Closed and freed connection for index %d, socket %d", i, sd);
-							} else {
-								{
-									log_info(LOGGER, "- %d Type Recieved %d", bytesread, incoming->type);
-
-									//INCOMING MESSAGE
-									//incoming_message(client_socket, string_duplicate(str), address.sin_port, incoming);
-
-									handle_incoming_struct * data = malloc(sizeof(handle_incoming_struct));
-									data->fd = client_socket;
-									data->ip = str;
-									data->port = address.sin_port;
-									data->header = incoming;
-
-									pthread_t handling_thread;
-									pthread_create(&handling_thread, NULL, &handle_incoming_as_thread, data);
-								}
-							}
-						}
-					}
+					log_info(LOGGER, "Awaiting new broker client");
 				}
 			}
 		}
@@ -1267,15 +1228,14 @@ int server_function(int socket) {
 int generate_message_id() {
 	return last_message_id++;
 }
-int acknowledge_message(int socket, char * ip, int port, int message_id) {
-	log_info(LOGGER, "FD %d ACK MSG %d", socket, message_id);
-	client * from = add_or_get_client(socket, ip, port);
+int acknowledge_message(client * subscriber, int message_id) {
+	log_info(LOGGER, "FD %d ACK MSG %d", subscriber->socket, message_id);
 
 	int i;
 	for(i=0 ; i<messages_index->elements_count ; i++) {
 		broker_message * message = list_get(messages_index, i);
 		if(message->message->header->message_id == message_id) {
-			list_add(message->already_acknowledged, from);
+			list_add(message->already_acknowledged, subscriber);
 			message_queue * queue = find_queue_by_name(message->message->header->queue);
 			if(message->already_acknowledged->elements_count ==
 					queue->subscribers->elements_count) {
@@ -1290,7 +1250,7 @@ int message_was_sent_to_susbcriber(broker_message * tmessage, client * subscribe
 	int i;
 	for(i=0 ; i<tmessage->already_sent->elements_count ; i++) {
 		client * sent = list_get(tmessage->already_sent, i);
-		if(is_same_client(sent, subscriber)) {
+		if(sent->socket == subscriber->socket) {
 			return 1;
 		}
 	}
@@ -1349,11 +1309,6 @@ int destroy_unserialized(void * payload, pokemon_message_type type) {
  *
  * */
 
-int is_same_client(client * c1, client * c2) {
-	return	(/*c1->socket == c2->socket ||*/
-			(c1->port == c2->port && strcmp(c2->ip, c1->ip) == 0));
-}
-
 client * remove_client(int socket, char * ip, int port) {
 	pthread_mutex_lock(&clients_mutex);
 	int i;
@@ -1374,8 +1329,7 @@ client * add_or_get_client(int socket, char * ip, int port) {
 	int i;
 	for(i=0 ; i<clients->elements_count ; i++) {
 		client * oc = list_get(clients, i);
-		if(oc->socket == socket ||
-				(oc->port == port && strcmp(oc->ip, ip) == 0)) {
+		if(oc->socket == socket) {
 			oc->just_created = 0;
 			pthread_mutex_unlock(&clients_mutex);
 			return oc;
