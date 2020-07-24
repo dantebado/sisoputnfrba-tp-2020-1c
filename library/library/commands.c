@@ -6,6 +6,7 @@ int _command_connect_to_broker(gameboy_config CONFIG) {
 		log_error(LOGGER, "Error opening broker socket");
 		return failed;
 	} else {
+		log_info(LOGGER, "Connected To Broker Socket");
 		return a_socket;
 	}
 }
@@ -15,6 +16,7 @@ int _command_connect_to_team(gameboy_config CONFIG) {
 		log_error(LOGGER, "Error opening team socket");
 		return failed;
 	} else {
+		log_info(LOGGER, "Connected To Team Socket");
 		return a_socket;
 	}
 }
@@ -24,6 +26,7 @@ int _command_connect_to_gamecard(gameboy_config CONFIG) {
 		log_error(LOGGER, "Error opening gamecard socket");
 		return failed;
 	} else {
+		log_info(LOGGER, "Connected To GameCard Socket");
 		return a_socket;
 	}
 }
