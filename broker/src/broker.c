@@ -690,8 +690,11 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 
 	log_info(LOGGER, "Sending %d, to FD %d", message->message->header->message_id, subscriber->socket);
 	pthread_mutex_lock(&(subscriber->ready_to_recieve_mutex));
+	log_info(LOGGER, "  RTR");
 	pthread_mutex_lock(&(subscriber->access_answering));
+	log_info(LOGGER, "   AA");
 	pthread_mutex_lock(&(subscriber->access_mutex));
+	log_info(LOGGER, "    AM");
 
 	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
 		log_info(LOGGER, "    Flag %d available to send %d", subscriber->socket, message->message->header->message_id);
@@ -715,7 +718,11 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 		destroy_unserialized(deserialized_message, message->message->header->type);
 		message->message->is_serialized = true;
 		message->message->payload = partition;
-		log_info(LOGGER, "    MID %d was not sent to FD %d due to recieving availability", message->message->header->message_id, subscriber->socket);
+		if(message_was_sent_to_susbcriber(message, subscriber)) {
+			log_info(LOGGER, "    MID %d was already sent to FD %d", message->message->header->message_id, subscriber->socket);
+		} else {
+			log_info(LOGGER, "    MID %d was not sent to FD %d due to recieving availability", message->message->header->message_id, subscriber->socket);
+		}
 		log_info(LOGGER, "    MID %d ready for more operations", message->message->header->message_id);
 		pthread_mutex_unlock(&(subscriber->access_mutex));
 		pthread_mutex_unlock(&(subscriber->access_answering));
@@ -1023,6 +1030,7 @@ void * handle_incoming(client * tsub, net_message_header * header) {
 		case READY_TO_RECIEVE:;
 			{
 				pthread_mutex_lock(&(tsub->ready_to_recieve_mutex));
+				send_int(tsub->socket, 1);
 				tsub->ready_to_recieve = 1;
 				log_info(LOGGER, "FD %d is now ready to recieve data", tsub->socket);
 				pthread_mutex_unlock(&(tsub->ready_to_recieve_mutex));
@@ -1072,11 +1080,14 @@ void * handle_incoming(client * tsub, net_message_header * header) {
 	tsub->doing_internal_work = 0;
 	pthread_mutex_unlock(&tsub->access_mutex);
 
+	pthread_t uswmal_t;
+	pthread_t broadcast_t;
+
 	if(post_uswmal == 1) {
-		update_subscriber_with_messages_all_queues(tsub);
+		pthread_create(&uswmal_t, NULL, update_subscriber_with_messages_all_queues, tsub);
 	}
 	if(broker_answer != NULL) {
-		broadcast_message(broker_answer);
+		pthread_create(&broadcast_t, NULL, broadcast_message, broker_answer);
 	}
 
 	return NULL;

@@ -1,4 +1,14 @@
+cd ..
+git clone https://github.com/sisoputnfrba/so-commons-library.git
+cd so-commons-library
+sudo make uninstall
+sudo make install
+cd ..
+
+cd tp-2020-1c-LUCSO-
+
 cd library
+sudo make uninstall
 sudo make install
 cd ./../
 

@@ -306,7 +306,7 @@ int ready_to_recieve(int broker_socket) {
 	net_message_header header;
 	header.type = READY_TO_RECIEVE;
 	send_header(broker_socket, &header);
-	return 1;
+	return recv_int(broker_socket);
 }
 int already_processed(int broker_socket) {
 	net_message_header header;

@@ -25,6 +25,9 @@ pthread_mutex_t broker_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t internal_need_mutex = PTHREAD_MUTEX_INITIALIZER;
 int internal_broker_need;
 
+pthread_mutex_t rtr_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t gets_left_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 pthread_t * exec_thread;
 t_list * get_pokemon_msgs_ids;
 
@@ -172,6 +175,7 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 
 									_diff_my_caught_pokemons(ttrainer);
 									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
+									treq->currently_in_progress -= 1;
 									treq->total_caught++;
 
 									if(is_trainer_completed(ttrainer)){
@@ -196,6 +200,14 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 										detect_circular_chains();
 									}
 								} else {
+									appeared_pokemon_message * tapm = ttrainer->stats->current_activity->data;
+									pokemon_requirement * treq = find_requirement_by_pokemon_name(tapm->pokemon);
+									treq->currently_in_progress -= 1;
+
+									free(ttrainer->stats->current_activity);
+									ttrainer->stats->current_activity = NULL;
+									ttrainer->stats->status = NEW_ACTION;
+
 									log_info(LOGGER, "Trainer %d could not capture his objective!", ttrainer->id);
 								}
 							}
@@ -209,24 +221,23 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 			{
 				log_info(LOGGER, "%s has been localized!", lpm->pokemon);
 
-				if(is_required(lpm->pokemon)) {
-					log_info(LOGGER, "Adding to required pokemons");
-
-					for(int i=0 ; i<lpm->locations_counter ; i++) {
-						location * tlocation = list_get(lpm->locations, i);
-						pthread_mutex_lock(&required_pokemons_mutex);
-						log_info(LOGGER, "Adding %s @[%d-%d] to required list", lpm->pokemon, tlocation->x, tlocation->y);
-						list_add(required_pokemons, appeared_pokemon_create(lpm->pokemon, tlocation->x, tlocation->y)->payload);
-						pthread_mutex_unlock(&required_pokemons_mutex);
-					}
-				} else { }
+				for(int i=0 ; i<lpm->locations_counter ; i++) {
+					if(is_required(lpm->pokemon)) {
+						log_info(LOGGER, "Adding to required pokemons");
+							location * tlocation = list_get(lpm->locations, i);
+							pthread_mutex_lock(&required_pokemons_mutex);
+							log_info(LOGGER, "Adding %s @[%d-%d] to required list", lpm->pokemon, tlocation->x, tlocation->y);
+							list_add(required_pokemons, appeared_pokemon_create(lpm->pokemon, tlocation->x, tlocation->y)->payload);
+							pthread_mutex_unlock(&required_pokemons_mutex);
+					} else { }
+				}
 			}
 			break;
 		default:
 			break;
 	}
 
-	if(from_broker == 1 && has_broker_connection) {
+	if(from_broker == 1 && has_broker_connection == true) {
 		already_processed(CONFIG.broker_socket);
 	}
 
@@ -249,7 +260,13 @@ pokemon_requirement * find_requirement_by_pokemon_name(char * name) {
 
 int is_required(char * pokemon) {
 	pokemon_requirement * req = find_requirement_by_pokemon_name(pokemon);
-	return req == false ? NULL : req->total_caught < req->total_count;
+	if(req != NULL) {
+		if((req->total_caught + req->currently_in_progress) < req->total_count) {
+			req->currently_in_progress += 1;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 void set_required_pokemons(){
@@ -271,6 +288,7 @@ void set_required_pokemons(){
 				trequirement = malloc(sizeof(pokemon_requirement));
 				trequirement->name = aux_pokemon;
 				trequirement->total_caught = 0;
+				trequirement->currently_in_progress = 0;
 				trequirement->total_count = 1;
 
 				list_add(global_requirements, trequirement);
@@ -286,27 +304,60 @@ void set_required_pokemons(){
 	}
 }
 
-void * send_gets(void * n) {
-	for(int i=0 ; i<global_requirements->elements_count ; i++) {
-		pokemon_requirement * treq = list_get(global_requirements, i);
-		queue_message * msg = get_pokemon_create(treq->name);
+int gets_left = 0;
+void * send_rtr() {
+	log_info(LOGGER, "Sending RTR %d", ready_to_recieve(CONFIG.broker_socket));
+	return NULL;
+}
 
-		log_info(LOGGER, "Sending GET for %s", treq->name);
+void * set_gets_left(int n) {
+	pthread_mutex_lock(&gets_left_mutex);
+	gets_left = n;
+	pthread_mutex_unlock(&gets_left_mutex);
+	return NULL;
+}
 
-		send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+int get_gets_left() {
+	int n;
+	pthread_mutex_lock(&gets_left_mutex);
+	n = gets_left;
+	pthread_mutex_unlock(&gets_left_mutex);
+	return n;
+}
 
-		int * tid = malloc(sizeof(int));
-		memcpy(tid, &msg->header->message_id, sizeof(int));
+void * send_initial_get(char * pokemon_name) {
+	pthread_mutex_lock(&broker_mutex);
 
-		log_info(LOGGER, "  GET was assigned MID %d", *tid);
+	queue_message * msg = get_pokemon_create(pokemon_name);
 
-		list_add(get_pokemon_msgs_ids, tid);
+	log_info(LOGGER, "Sending GET for %s", pokemon_name);
+	send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
+
+	int * tid = malloc(sizeof(int));
+	memcpy(tid, &msg->header->message_id, sizeof(int));
+
+	set_gets_left(get_gets_left() - 1);
+	log_info(LOGGER, "  GET was assigned MID %d (%d)", *tid, gets_left);
+	list_add(get_pokemon_msgs_ids, tid);
+
+	if(get_gets_left() == 0) {
+		send_rtr();
+		set_internal_need(0);
 	}
 
-	log_info(LOGGER, "Sending RTR %d", ready_to_recieve(CONFIG.broker_socket));
-
-	set_internal_need(0);
 	pthread_mutex_unlock(&broker_mutex);
+	return NULL;
+}
+
+void * send_gets(void * n) {
+	sleep(2);
+	gets_left = global_requirements->elements_count;
+	for(int i=0 ; i<global_requirements->elements_count ; i++) {
+		pokemon_requirement * treq = list_get(global_requirements, i);
+
+		pthread_t tt;
+		pthread_create(&tt, NULL, send_initial_get, treq->name);
+	}
 	return NULL;
 }
 
@@ -337,8 +388,10 @@ int broker_server_function() {
 	log_info(LOGGER, "Subscribing to Queue CAUGHT_POKEMON");
 	subscribe_to_queue(CONFIG.broker_socket, QUEUE_CAUGHT_POKEMON);
 
-	pthread_mutex_lock(&broker_mutex);
-	send_gets(NULL);
+	set_internal_need(1);
+
+	pthread_t thread_gets;
+	pthread_create(&thread_gets, NULL, send_gets, NULL);
 
 	while(1) {
 		void * buffer = malloc(1);
@@ -350,8 +403,8 @@ int broker_server_function() {
 
 		pthread_mutex_lock(&broker_mutex);
 
-		log_info(LOGGER, "  Hay data en el buffer de Broker");
-		if(get_internal_need() == 0) {
+		log_info(LOGGER, "  Hay data en el buffer de Broker %d", get_internal_need());
+		if(get_internal_need() == 0 && gets_left == 0) {
 			recv(CONFIG.broker_socket, header, sizeof(net_message_header), 0);
 			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
 			send_message_acknowledge(message, CONFIG.broker_socket);
@@ -411,6 +464,34 @@ trainer * closest_free_trainer(int pos_x, int pos_y){
 				if(closest_distance > tdistance) {
 					closest_distance = tdistance;
 					closest_trainer = ttrainer;
+				}
+			}
+		} else {
+			if(is_free(ttrainer)) {
+				log_info(LOGGER, "    %d is not a candidate, has catched %d of %d total",
+						ttrainer->id,
+						ttrainer->pokemons->elements_count,
+						ttrainer->targets->elements_count);
+			} else {
+				if(ttrainer->stats->current_activity == NULL) {
+					log_info(LOGGER, "    %d is not a candidate, but is has no activity");
+				} else {
+					switch(ttrainer->stats->current_activity->type) {
+						case CAPTURING:;
+							appeared_pokemon_message * apm = ttrainer->stats->current_activity->data;
+							log_info(LOGGER, "    %d is not a candidate, is capturing %s @[%d-%d]",
+									ttrainer->id,
+									apm->pokemon,
+									apm->x,
+									apm->y);
+							break;
+						case AWAITING_CAPTURE_RESULT:
+							log_info(LOGGER, "    %d is not a candidate, is awaiting catch result");
+							break;
+						case TRADING:
+							log_info(LOGGER, "    %d is not a candidate, is currently trading");
+							break;
+					}
 				}
 			}
 		}
@@ -638,8 +719,8 @@ void print_current_requirements() {
 	log_info(LOGGER, "GLOBAL REQUIREMENTS");
 	for(i=0 ; i<global_requirements->elements_count ; i++) {
 		pokemon_requirement * req = list_get(global_requirements, i);
-		log_info(LOGGER, "\tRequirement %s - Total %d - Caught %d - Left %d", req->name,
-					req->total_count, req->total_caught, req->total_count - req->total_caught);
+		log_info(LOGGER, "\tRequirement %s - Total %d - Caught %d - Left %d - In Progress %d", req->name,
+					req->total_count, req->total_caught, req->total_count - req->total_caught, req->currently_in_progress);
 	}
 }
 
@@ -776,6 +857,7 @@ void executing(trainer * t){
 						if(has_broker_connection == true) {
 							pthread_mutex_lock(&broker_mutex);
 							log_info(LOGGER, "Broker mutex was available");
+
 								send_pokemon_message(CONFIG.broker_socket, msg, 1, -1);
 								t->stats->current_activity->correlative_id_awaiting = msg->header->message_id;
 								t->stats->current_activity->type = AWAITING_CAPTURE_RESULT;
@@ -789,6 +871,7 @@ void executing(trainer * t){
 							_diff_my_caught_pokemons(t);
 							pokemon_requirement * treq = find_requirement_by_pokemon_name(apm->pokemon);
 							treq->total_caught++;
+							treq->currently_in_progress -= 1;
 
 							log_info(LOGGER, "Capture registered successfully due to unconnected broker");
 							print_current_requirements();

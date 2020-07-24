@@ -252,6 +252,7 @@ typedef struct {
 	char * name;
 	int total_count;
 	int total_caught;
+	int currently_in_progress;
 } pokemon_requirement;
 
 typedef enum{
