@@ -784,13 +784,13 @@ int unsubscribe_from_broker_queue(client * subscriber, _message_queue_name queue
 
 	if(queue != NULL) {
 
-		for(int i=0 ; i<queue->subscribers ; i++) {
+		for(int i=0 ; i<queue->subscribers->elements_count ; i++) {
 			client * ts = list_get(queue->subscribers, i);
 			if(ts->socket == subscriber->socket) {
 				list_remove(queue->subscribers, i);
 			}
 		}
-		for(int i=0 ; i<subscriber->queues ; i++) {
+		for(int i=0 ; i<subscriber->queues->elements_count ; i++) {
 			message_queue * tq = list_get(subscriber->queues, i);
 			if(tq->name == queue->name) {
 				list_remove(subscriber->queues, i);
@@ -803,13 +803,14 @@ int unsubscribe_from_broker_queue(client * subscriber, _message_queue_name queue
 	}
 }
 int unsubscribe_from_all_queues(client * subscriber) {
-	for(int i=0 ; i<subscriber->queues ; i++) {
+	for(int i=0 ; i<subscriber->queues->elements_count ; i++) {
 		message_queue * queue = list_get(subscriber->queues, i);
 		if(unsubscribe_from_broker_queue(subscriber, queue->name) == OPT_OK){
 			i--;
 		}
 	}
-	log_info(LOGGER, "FD %d unsubscribed from all queues");
+	log_info(LOGGER, "FD %d unsubscribed from all queues", subscriber->socket);
+	return OPT_OK;
 }
 
 /*

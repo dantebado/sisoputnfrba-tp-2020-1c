@@ -173,6 +173,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 									treq->currently_in_progress -= 1;
 									treq->total_caught++;
 
+									print_current_requirements();
+
 									if(is_trainer_completed(ttrainer)){
 										ttrainer->stats->status = EXIT_ACTION;
 										log_info(LOGGER, "Trainer %d is in exit! He caught his last pokemon", ttrainer->id);
@@ -204,6 +206,8 @@ int process_pokemon_message(queue_message * message, int from_broker) {
 									ttrainer->stats->status = NEW_ACTION;
 
 									log_info(LOGGER, "Trainer %d could not capture his objective!", ttrainer->id);
+
+									print_current_requirements();
 								}
 							}
 						}
@@ -853,6 +857,7 @@ void executing(trainer * t){
 							treq->currently_in_progress -= 1;
 
 							log_info(LOGGER, "Capture registered successfully due to unconnected broker");
+
 							print_current_requirements();
 
 							t->stats->current_activity = NULL;
