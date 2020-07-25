@@ -505,20 +505,24 @@ int broker_server_function() {
 		net_message_header * header = malloc(sizeof(net_message_header));
 
 		log_info(LOGGER, "Awaiting message from Broker");
-		recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
 
-		pthread_mutex_lock(&broker_mutex);
-		if(internal_broker_need == 0) {
-			pthread_mutex_lock(&op_mutex);
-			read(CONFIG.broker_socket, header, sizeof(net_message_header));
-			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
-			send_message_acknowledge(message, CONFIG.broker_socket);
+		if(recv(CONFIG.broker_socket, header, 1, MSG_PEEK) != -1){
+			pthread_mutex_lock(&broker_mutex);
+			if(internal_broker_need == 0) {
+				pthread_mutex_lock(&op_mutex);
+				read(CONFIG.broker_socket, header, sizeof(net_message_header));
+				queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
+				send_message_acknowledge(message, CONFIG.broker_socket);
 
-			gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
-			payload->from_broker = 1;
-			payload->message = message;
+				gamecard_thread_payload * payload = malloc(sizeof(gamecard_thread_payload));
+				payload->from_broker = 1;
+				payload->message = message;
 
-			process_pokemon_message(payload);
+				process_pokemon_message(payload);
+			}
+		}else{
+			log_info(LOGGER, "Broker connection lost...");
+			broker_server_function();
 		}
 	}
 
