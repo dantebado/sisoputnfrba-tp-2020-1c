@@ -501,12 +501,16 @@ int broker_server_function() {
 
 	ready_to_recieve(CONFIG.broker_socket);
 
+	int check_recv = 0;
+
 	while(1) {
 		net_message_header * header = malloc(sizeof(net_message_header));
 
 		log_info(LOGGER, "Awaiting message from Broker");
 
-		if(recv(CONFIG.broker_socket, header, 1, MSG_PEEK) != -1){
+		check_recv = recv(CONFIG.broker_socket, header, 1, MSG_PEEK);
+
+		if(check_recv != 0 && check_recv != -1){
 			pthread_mutex_lock(&broker_mutex);
 			if(internal_broker_need == 0) {
 				pthread_mutex_lock(&op_mutex);
@@ -520,7 +524,7 @@ int broker_server_function() {
 
 				process_pokemon_message(payload);
 			}
-		}else{
+		} else {
 			log_info(LOGGER, "Broker connection lost...");
 			broker_server_function();
 		}
