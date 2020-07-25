@@ -6,8 +6,8 @@
 
 * *Nicolas Molina*
 * *Dante Bado*
-* *Matias Iglesias*
-* *Agustin De Cesare*
+* ~~*Matias Iglesias*~~
+* ~~*Agustin De Cesare*~~
 * *Franco Montenegro*
 
 ### Libreria
