@@ -102,7 +102,6 @@ int main(int argc, char **argv) {
 	return EXIT_SUCCESS;
 }
 
-
 //Explicit definitions
 int is_id_in_list(t_list * list, int value) {
 	int i;
@@ -404,14 +403,20 @@ int broker_server_function() {
 		log_info(LOGGER, "Awaiting data from Broker");
 		int checkrecv = recv(CONFIG.broker_socket, buffer, 1, MSG_PEEK);
 		free(buffer);
-		pthread_mutex_lock(&broker_mutex);
-		int in = get_internal_need();
-		if(in == 0 && get_gets_left() == 0) {
-			recv(CONFIG.broker_socket, header, sizeof(net_message_header), 0);
-			queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
-			send_message_acknowledge(message, CONFIG.broker_socket);
-			set_internal_need(1);
-			process_pokemon_message(message, 1);
+
+		if(checkrecv != 0 && checkrecv != -1) {
+			pthread_mutex_lock(&broker_mutex);
+			int in = get_internal_need();
+			if(in == 0 && get_gets_left() == 0) {
+				recv(CONFIG.broker_socket, header, sizeof(net_message_header), 0);
+				queue_message * message = receive_pokemon_message(CONFIG.broker_socket);
+				send_message_acknowledge(message, CONFIG.broker_socket);
+				set_internal_need(1);
+				process_pokemon_message(message, 1);
+			}
+		} else {
+			log_info(LOGGER, "Broker connection lost...");
+			broker_server_function();
 		}
 	}
 
