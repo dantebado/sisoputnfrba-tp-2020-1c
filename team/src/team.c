@@ -29,7 +29,7 @@ pthread_mutex_t rtr_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t all_gets_ready = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t gets_left_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-pthread_t * exec_thread;
+pthread_t exec_thread;
 t_list * get_pokemon_msgs_ids;
 
 //STATISTICS
@@ -675,11 +675,9 @@ void setup(int argc, char **argv) {
 
 	CONFIG.broker_socket = create_socket();
 	log_info(LOGGER, "Broker socket %d", CONFIG.broker_socket);
-	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, CONFIG.broker_socket);
+	pthread_create(&CONFIG.broker_thread, NULL, broker_server_function, NULL);
 
-	exec_thread = malloc(sizeof(pthread_t));
-	pthread_create(exec_thread, NULL, exec_thread_function, NULL);
-	pthread_join(exec_thread, NULL);
+	pthread_create(&exec_thread, NULL, exec_thread_function, NULL);
 
 	pthread_join(CONFIG.server_thread, NULL);
 	pthread_join(CONFIG.broker_thread, NULL);
