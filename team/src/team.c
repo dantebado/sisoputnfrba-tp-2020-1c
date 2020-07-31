@@ -290,6 +290,8 @@ void set_required_pokemons(){
 				trequirement->total_count = 1;
 
 				list_add(global_requirements, trequirement);
+
+				free(trequirement);
 			} else {
 				trequirement->total_count++;
 			}
@@ -337,6 +339,8 @@ void * send_initial_get(char * pokemon_name) {
 	set_gets_left(get_gets_left() - 1);
 	log_info(LOGGER, "  GET was assigned MID %d (%d)", *tid, gets_left);
 	list_add(get_pokemon_msgs_ids, tid);
+
+	free(tid);
 
 	if(get_gets_left() == 0) {
 		send_rtr();
@@ -418,6 +422,8 @@ int broker_server_function() {
 			log_info(LOGGER, "Broker connection lost...");
 			broker_server_function();
 		}
+
+		free(header);
 	}
 
 	return 0;
@@ -659,6 +665,8 @@ void setup(int argc, char **argv) {
 			list_add(trainers, t);
 
 			log_info(LOGGER, "There is a new trainer with id %d @ [%d - %d]", t->id, t->x, t->y);
+
+			free(t);
 		}
 	}
 
@@ -1055,6 +1063,8 @@ void compute_pending_actions() {
 			free_trainer->stats->status = READY_ACTION;
 			list_add(ready_queue, free_trainer);
 
+			free(activity);
+
 			log_info(LOGGER, "Trainer %d is ready! He is the closest to catch %s", free_trainer->id, apm->pokemon);
 			list_remove(required_pokemons, 0);
 		} else {
@@ -1140,6 +1150,8 @@ void combinations(t_list * all_trainers, int original_length, int length, int st
 	if(length == 0){
 		t_list * cloned = clone_list(current_result);
 		list_add(all_results, cloned);
+
+		list_destroy(cloned);
 		return;
 	}
 
@@ -1161,6 +1173,7 @@ t_list * all_combinations_of_size(t_list * all_trainers, int size){
 	t_list * trainers_of_size = list_create();
 
 	combinations(all_trainers, size, size, 0, trainers_of_size, all_results_of_size);
+	list_destroy(trainers_of_size);
 
 	return all_results_of_size;
 }
@@ -1175,6 +1188,8 @@ t_list * all_possible_combinations(t_list * all_trainers){
 		for(int j=0; j<partial_result->elements_count; j++){
 			list_add(final_result, list_get(partial_result, j));
 		}
+
+		list_destroy(partial_result);
 	}
 
 	return final_result;
@@ -1205,6 +1220,7 @@ int exists_path_to(trainer * first, trainer * from, trainer * to, t_list * tg, t
 
 		if(ttrainer->id != first->id && !list_contains(steps, ttrainer)){
 			list_add(steps, ttrainer);
+			list_destroy(base_list);
 			if(exists_path_to(first, ttrainer, to, tg, steps)) return true;
 		}
 	}
@@ -1225,11 +1241,13 @@ void detect_circular_chains(){
 				if(!exists_path_to(list_get(tg, j), list_get(tg, j), list_get(tg, 0), tg, aux_trainer_list)){
 					is_in_deadlock = false;
 				}
+				list_destroy(aux_trainer_list);
 
 				t_list * another_aux_trainer_list = list_create();
 				if(!exists_path_to(list_get(tg, 0), list_get(tg, 0), list_get(tg, j), tg, another_aux_trainer_list)){
 					is_in_deadlock = false;
 				}
+				list_destroy(another_aux_trainer_list);
 			}
 
 			if(is_in_deadlock){
@@ -1256,8 +1274,12 @@ int detect_deadlock_from(trainer * root, t_list * tg){
 		trainer * t = list_get(base_list, i);
 		t_list * trainer_steps = list_create();
 		if(exists_path_to(root, t, root, tg, trainer_steps)){
+			list_destroy(base_list);
+			list_destroy(trainer_steps);
+
 			return true;
 		}
+		list_destroy(trainer_steps);
 	}
 	return false;
 }
@@ -1290,6 +1312,8 @@ void solve_deadlock_for(t_list * tg, trainer * root){
 						ttrainer->stats->current_activity = activity;
 						ttrainer->stats->status = READY_ACTION;
 						list_add(ready_queue, ttrainer);
+
+						free(activity);
 
 						deadlock_solver = ttrainer;
 					}
