@@ -77,7 +77,6 @@ int destroy_unserialized(void * payload, pokemon_message_type type);
 
 //CLIENTS
 client * add_or_get_client(int socket, char * ip, int port);
-client * remove_client(int socket, char * ip, int port);
 
 t_log * LOGGER_DUMP;
 
@@ -97,7 +96,6 @@ int main(int argc, char **argv) {
  * */
 
 void setup(int argc, char **argv) {
-
 	char * cfg_path = string_new();
 
 	string_append(&cfg_path, (argc > 1) ? argv[1] : "broker");
@@ -312,7 +310,6 @@ memory_partition * get_partitions_available_by_alg(int partition_size) {
 	} while(continue_parsing);
 
 	if(found_memory != NULL) {
-
 		if(found_memory->partition_size == partition_size) {
 			return found_memory;
 		}
@@ -459,6 +456,7 @@ void free_memory_partition(memory_partition * partition) {
 					for(i=0 ; i<partitions->elements_count ; i++) {
 						memory_partition * tp = list_get(partitions, i);
 						if(tp->number == next_partition->number) {
+							free(list_get(partitions, i));
 							list_remove(partitions, i);
 							i--;
 						} else {
@@ -505,6 +503,7 @@ void compact_memory(int already_reserved_mutex) {
 					memory_partition * tp = list_get(partitions, i);
 					if(tp->is_free) {
 						free_s += tp->partition_size;
+						free(list_get(partitions, i));
 						list_remove(partitions, i);
 						removed++;
 						i--;
@@ -676,8 +675,8 @@ broker_message * add_message_to_queue(queue_message * message, _message_queue_na
 
 	pthread_mutex_lock(&messages_index_mutex);
 	pthread_mutex_lock(&(queue->access_mutex));
-	list_add(queue->messages, final_message);
-	list_add(messages_index, final_message);
+		list_add(queue->messages, final_message);
+		list_add(messages_index, final_message);
 	pthread_mutex_unlock(&(queue->access_mutex));
 	pthread_mutex_unlock(&messages_index_mutex);
 	return final_message;
@@ -685,14 +684,17 @@ broker_message * add_message_to_queue(queue_message * message, _message_queue_na
 int send_message_to_client(broker_message * message, client * subscriber) {
 	memory_partition * partition = message->payload_address_copy;
 
-	void * deserialized_message = deserialize_message_payload(partition->partition_start, message->message->header->type);
-	message->message->is_serialized = false;
-	message->message->payload = deserialized_message;
-
 	log_info(LOGGER, "Sending %d, to FD %d", message->message->header->message_id, subscriber->socket);
 	pthread_mutex_lock(&(subscriber->ready_to_recieve_mutex));
 	pthread_mutex_lock(&(subscriber->access_answering));
 	pthread_mutex_lock(&(subscriber->access_mutex));
+
+	void * deserialized_message = deserialize_message_payload(
+			partition->partition_start,
+			message->message->header->type);
+
+	message->message->is_serialized = false;
+	message->message->payload = deserialized_message;
 
 	if(!message_was_sent_to_susbcriber(message, subscriber) && subscriber->ready_to_recieve == 1) {
 		send_pokemon_message_with_id(subscriber->socket, message->message, 0,
@@ -714,11 +716,13 @@ int send_message_to_client(broker_message * message, client * subscriber) {
 		destroy_unserialized(deserialized_message, message->message->header->type);
 		message->message->is_serialized = true;
 		message->message->payload = partition;
+
 		if(message_was_sent_to_susbcriber(message, subscriber)) {
 			log_info(LOGGER, "MID %d was already sent to FD %d", message->message->header->message_id, subscriber->socket);
 		} else {
 			log_info(LOGGER, "MID %d was not sent to FD %d due to recieving availability", message->message->header->message_id, subscriber->socket);
 		}
+
 		pthread_mutex_unlock(&(subscriber->access_mutex));
 		pthread_mutex_unlock(&(subscriber->access_answering));
 		pthread_mutex_unlock(&(subscriber->ready_to_recieve_mutex));
@@ -1110,6 +1114,8 @@ void * handle_incoming(client * tsub, net_message_header * header) {
 			break;
 	}
 
+	free(header);
+
 	tsub->doing_internal_work = 0;
 	pthread_mutex_unlock(&tsub->access_mutex);
 
@@ -1151,6 +1157,7 @@ void * descriptor_socket(int * _fd_) {
 				recv(fd, header, sizeof(net_message_header), 0);
 
 				handle_incoming(tsub, header);
+				//Header freed inside handle_incoming
 			} else {
 				//Doing internal work
 			}
@@ -1343,21 +1350,6 @@ int destroy_unserialized(void * payload, pokemon_message_type type) {
  *
  * */
 
-client * remove_client(int socket, char * ip, int port) {
-	pthread_mutex_lock(&clients_mutex);
-	int i;
-	for(i=0 ; i<clients->elements_count ; i++) {
-		client * oc = list_get(clients, i);
-		if(oc->socket == socket ||
-			(oc->port == port && strcmp(oc->ip, ip) == 0)) {
-			list_remove(clients, i);
-			pthread_mutex_unlock(&clients_mutex);
-			return oc;
-		}
-	}
-	pthread_mutex_unlock(&clients_mutex);
-	return NULL;
-}
 client * add_or_get_client(int socket, char * ip, int port) {
 	pthread_mutex_lock(&clients_mutex);
 	int i;
