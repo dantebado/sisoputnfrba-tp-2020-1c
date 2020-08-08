@@ -1126,8 +1126,11 @@ void * handle_incoming(client * tsub, net_message_header * header) {
 	return NULL;
 }
 
+#define MAX_CONN 50
+int client_socket_array[MAX_CONN];
+
 void * descriptor_socket(int * _fd_) {
-	int fd = * _fd_, addrlen, recvcheck, has_connection = true;
+	int fd = * _fd_, addrlen, recvcheck, has_connection = true, i;
 	struct sockaddr_in address;
 	getpeername(fd , (struct sockaddr*)&address , (socklen_t*)&addrlen);
 	char str[INET_ADDRSTRLEN];
@@ -1160,6 +1163,12 @@ void * descriptor_socket(int * _fd_) {
 	}
 	log_info(LOGGER, "Lost connection socket %d", fd);
 	unsubscribe_from_all_queues(tsub);
+	for(i=0 ; i<MAX_CONN ; i++) {
+		if(client_socket_array[i] == fd) {
+			client_socket_array[i] = 0;
+		}
+	}
+	close(fd);
 
 	return NULL;
 }
@@ -1171,9 +1180,8 @@ void * descriptor_socket(int * _fd_) {
  * */
 
 int server_function(int socket) {
-	int MAX_CONN = 50;
 
-	int addrlen, new_socket ,client_socket_array[MAX_CONN], activity, i, sd;
+	int addrlen, new_socket, activity, i, sd;
 	int max_sd;
 	struct sockaddr_in address;
 	fd_set readfds;
