@@ -593,7 +593,7 @@ void setup_tall_grass() {
 		fclose(bitmap_file);
 
 		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
-		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks_in_bytes, LSB_FIRST);
+		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks_in_bytes, MSB_FIRST);
 		int i;
 		for(i=0 ; i<tall_grass->blocks ; i++) {
 			bitarray_clean_bit(tall_grass->bitmap, i);
@@ -607,7 +607,7 @@ void setup_tall_grass() {
 
 		void * bitmap_data = malloc(tall_grass->blocks_in_bytes);
 		fread(bitmap_data, tall_grass->blocks / 8, 1, bitmap_file);
-		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, LSB_FIRST);
+		tall_grass->bitmap = bitarray_create_with_mode(bitmap_data, tall_grass->blocks/8, MSB_FIRST);
 
 		int d, free = 0;
 		for(d=0 ; d<tall_grass->blocks ; d++) {
@@ -628,6 +628,8 @@ void save_bitmap() {
 	char * _tall_grass_bitmap_path = string_duplicate(config_get_string_value(_CONFIG, "PUNTO_MONTAJE_TALLGRASS"));
 	string_append(&_tall_grass_bitmap_path, "/Metadata/Bitmap.bin");
 	FILE * bitmap_file = fopen(_tall_grass_bitmap_path, "w");
+
+	debug_bitmap();
 
 	fwrite(tall_grass->bitmap->bitarray, tall_grass->blocks / 8, 1, bitmap_file);
 
