@@ -1068,7 +1068,7 @@ void compute_pending_actions() {
 void exec_thread_function() {
 	while(!is_globally_completed()) {
 		usleep(CONFIG.cpu_delay * 1000 * 1000);
-		log_info(LOGGER, "Planning & Sorting Queues");
+		//log_info(LOGGER, "Planning & Sorting Queues");
 
 		compute_pending_actions();
 		sort_queues();
