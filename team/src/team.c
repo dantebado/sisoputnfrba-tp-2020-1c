@@ -1041,7 +1041,7 @@ trainer * find_free_trainer() {
 void compute_pending_actions() {
 	pthread_mutex_lock(&required_pokemons_mutex);
 	int no_available_trainers = 0;
-	log_info(LOGGER, "Planning catch for %d pokemons", required_pokemons->elements_count);
+	//log_info(LOGGER, "Planning catch for %d pokemons", required_pokemons->elements_count);
 	while(required_pokemons->elements_count > 0 && no_available_trainers == 0) {
 		appeared_pokemon_message * apm = list_get(required_pokemons, 0);
 		trainer * free_trainer = closest_free_trainer(apm->x, apm->y);

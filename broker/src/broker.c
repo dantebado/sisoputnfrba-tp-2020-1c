@@ -23,6 +23,8 @@ pthread_mutex_t memory_access_mutex;
 int time_counter;
 pthread_mutex_t time_counter_mutex;
 
+pthread_mutex_t broker_access_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 /*/
  *
  * PROTOTYPES
@@ -1128,6 +1130,7 @@ void * handle_incoming(client * tsub, net_message_header * header) {
 
 #define MAX_CONN 50
 int client_socket_array[MAX_CONN];
+int client_socket_array_close[MAX_CONN];
 
 void * descriptor_socket(int * _fd_) {
 	int fd = * _fd_, addrlen, recvcheck, has_connection = true, i;
@@ -1163,12 +1166,22 @@ void * descriptor_socket(int * _fd_) {
 	}
 	log_info(LOGGER, "Lost connection socket %d", fd);
 	unsubscribe_from_all_queues(tsub);
+	
+	for(i=0 ; i<MAX_CONN ; i++) {
+		if(client_socket_array_close[i] == 0){
+			client_socket_array_close[i] = fd;
+			i = MAX_CONN + 1;
+		}
+	}
+		
+	/*pthread_mutex_lock(&broker_access_mutex);
 	for(i=0 ; i<MAX_CONN ; i++) {
 		if(client_socket_array[i] == fd) {
 			client_socket_array[i] = 0;
+			i = MAX_CONN + 1;
 		}
 	}
-	close(fd);
+	pthread_mutex_unlock(&broker_access_mutex);*/
 
 	return NULL;
 }
@@ -1181,13 +1194,14 @@ void * descriptor_socket(int * _fd_) {
 
 int server_function(int socket) {
 
-	int addrlen, new_socket, activity, i, sd;
+	int addrlen, new_socket, activity, i, j, sd;
 	int max_sd;
 	struct sockaddr_in address;
 	fd_set readfds;
 
 	for (i = 0; i < MAX_CONN; i++) {
 		client_socket_array[i] = 0;
+		client_socket_array_close[i] = 0;
 	}
 	log_trace(LOGGER, "Init Clients");
 	if (listen(socket, MAX_CONN) < 0) {
@@ -1203,10 +1217,22 @@ int server_function(int socket) {
 		FD_ZERO(&readfds);
 		FD_SET(socket, &readfds);
 		max_sd = socket;
+		for(i=0 ; i<MAX_CONN ; i++) {
+			int a = client_socket_array_close[i];
+			if(a != 0){
+				for(j=0 ; j<MAX_CONN ; j++) {
+					if(client_socket_array[j] == a) {
+						client_socket_array[j] = 0;
+						close(a);
+					}
+				}
+				client_socket_array_close[i] = 0;
+			}
+		}
 		for (i = 0 ; i < MAX_CONN ; i++) {
 			sd = client_socket_array[i];
 			if (sd > 0){
-				FD_SET( sd , &readfds);
+				FD_SET(sd, &readfds);
 			}
 			if (sd > max_sd){
 				max_sd = sd;
@@ -1228,19 +1254,21 @@ int server_function(int socket) {
 					inet_ntop(AF_INET, &(address.sin_addr), str, INET_ADDRSTRLEN);
 
 					int registered = 0;
+					pthread_mutex_lock(&broker_access_mutex);
 					for (i = 0; i < MAX_CONN; i++) {
 						if (client_socket_array[i] == 0) {
 							client_socket_array[i] = new_socket;
 							log_trace(LOGGER, "New client registered in index %d", i);
 							registered = 1;
-							break;
+							i = MAX_CONN + 1;
 						}
 					}
+					pthread_mutex_unlock(&broker_access_mutex);
 
 					{
 						//NEW CONNECTION
 						//new_connection(new_socket, string_duplicate(str), address.sin_port);
-
+						
 						int * _fd_ = malloc(sizeof(int));
 						memcpy(_fd_, &new_socket, sizeof(int));
 

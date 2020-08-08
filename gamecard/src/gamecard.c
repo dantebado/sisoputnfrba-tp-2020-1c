@@ -405,7 +405,7 @@ void * write_payload_in_file(char * path, char * filename, char * payload, int p
 		written_bytes += this_block_size;
 	} while (written_bytes < payload_size);
 	string_append(&blocks_for_config, "]");
-
+	
 	while(gonzalo < blocks->elements_count) {
 		int * v = list_get(blocks, gonzalo);
 		int vv = *v;
